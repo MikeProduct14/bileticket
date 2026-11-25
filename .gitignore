@@ -1,2 +1,4 @@
 /dist/
 /.openai/
+/dist-pages/
+/.pages-build-*/
