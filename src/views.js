@@ -1,4 +1,4 @@
-import { cities, routes, routePath, sitePath, today, offsetDate, dateLabel, rub, durationLabel, tripsFor, dayPrice, demoCarrier } from './data.js';
+import { cities, routes, routePath, sitePath, today, offsetDate, dateLabel, rub, durationLabel, tripsFor, dayPrice, sortTrips, localDateTime, refundFor, refundRules } from './data.js';
 
 const iconPaths = {
   route: '<circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M7 18h8a4 4 0 0 0 0-8H9a2 2 0 0 1 0-4h8"/>',
@@ -21,6 +21,9 @@ const iconPaths = {
   bag: '<rect x="5" y="8" width="14" height="13" rx="2"/><path d="M9 8V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3m-5 3v7m4-7v7"/>',
   doc: '<path d="M6 3h8l4 4v14H6zM14 3v5h4m-9 5h6m-6 4h6"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
+  star: '<path d="m12 3 2.8 5.7 6.3.9-4.5 4.4 1 6.3-5.6-3-5.6 3 1-6.3L3 9.6l6.2-.9Z"/>',
+  message: '<path d="M20 11a7 7 0 0 1-7 7H9l-4 3v-5a7 7 0 0 1 0-10 7 7 0 0 1 5-2h3a7 7 0 0 1 7 7Z"/><path d="M8 11h7"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 7 8 6 8-6"/>',
   seat: '<path d="M7 12V5a3 3 0 0 1 6 0v5h4a3 3 0 0 1 3 3v5H9l-4-5a2 2 0 0 1 2-3m0 8v3m11-3v3"/>',
   card: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18m-14 5h4"/>'
 };
@@ -45,6 +48,7 @@ export function page({ title, description, body, path = '/', pageType, route }) 
   <link rel="canonical" href="${path}">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/styles.css">
+  ${pageType === 'route' ? '<link rel="stylesheet" href="/assets/results.css">' : ''}
   <title>${escapeHTML(title)}</title>
   <script type="module" src="/assets/app.js"></script>
 </head>
@@ -103,6 +107,15 @@ export function home() {
 }
 
 export const documentButton = (key, label) => '<button type="button" class="text-link doc-link" data-doc="' + key + '">' + label + '</button>';
+export const supportButton = () => '<button type="button" class="button secondary support-action" data-support aria-haspopup="dialog">' + icon('message') + ' Связаться</button>';
+export const supportChannels = () => `<div class="support-channels">
+  <p class="field-hint">Демонстрационные способы связи</p>
+  <ul aria-label="Тестовые каналы">
+    <li><span class="route-icon">${icon('message')}</span><div><strong>Чат поддержки</strong><span>Тестовый канал</span></div></li>
+    <li><span class="route-icon">${icon('mail')}</span><div><strong>Электронная почта</strong><span>support@example.invalid</span></div></li>
+  </ul>
+  <a class="text-link" href="${sitePath('/pomosh/posadka/')}">Открыть справку ${icon('arrow')}</a>
+</div>`;
 
 export function timeLine(trip) {
   const dates = [trip.date, trip.arrivalDate].map(date => dateLabel(date, { day: 'numeric', month: 'short' }));
@@ -113,27 +126,82 @@ export function timeLine(trip) {
     </div>`;
 }
 
-export function tripDetails(trip) {
+const reviewNumber = new Intl.NumberFormat('ru-RU');
+const reviewPlural = new Intl.PluralRules('ru-RU');
+const reviewWords = { one: 'отзыв', few: 'отзыва', many: 'отзывов', other: 'отзыва' };
+function carrierDetails(trip) {
+  const { name, rating, reviews } = trip.carrier;
+  return `<div class="carrier-details">
+    <div class="carrier-identity">${icon('bus')}<strong>${escapeHTML(name)}</strong><span class="demo-data">Демоданные</span></div>
+    <div class="carrier-rating">${icon('star')}<span><span class="sr-only">Рейтинг </span>${reviewNumber.format(rating)}<span class="sr-only"> из 5</span> · ${reviewNumber.format(reviews)} ${reviewWords[reviewPlural.select(reviews)]}</span></div>
+  </div>
+  <ul class="trip-amenities" aria-label="Удобства">${trip.amenities.map(amenity => `<li>${icon('check')} ${escapeHTML(amenity)}</li>`).join('')}</ul>`;
+}
+
+function itinerary(trip) {
+  const origin = cities[trip.route.from];
+  const destination = cities[trip.route.to];
+  const stops = [
+    { ...origin, station: trip.fromStation, address: trip.fromAddress, time: trip.departure, date: trip.date, endpoint: 'Посадка' },
+    ...trip.stops,
+    { ...destination, station: trip.toStation, address: trip.toAddress, time: trip.arrival, date: trip.arrivalDate, endpoint: 'Прибытие' }
+  ];
+  return `<p class="schedule-timezone">Местное время · ${durationLabel(trip.duration)} в пути</p>
+  <ol class="itinerary" aria-label="Остановки по маршруту">${stops.map(stop => {
+    const station = [stop.station, stop.address].filter(Boolean).join(', ');
+    const region = stop.region === stop.name ? '' : stop.region;
+    return `<li${stop.endpoint ? ' class="itinerary-endpoint"' : ''}>
+      <time datetime="${localDateTime(stop.date, stop.time)}">${stop.time}<span>${dateLabel(stop.date, { day: 'numeric', month: 'short' })}</span></time>
+      <span class="itinerary-marker" aria-hidden="true"></span>
+      <div>${stop.endpoint ? `<span class="itinerary-kind">${stop.endpoint}</span>` : ''}<strong>${escapeHTML(stop.name)}</strong>${station ? `<span>${escapeHTML(station)}</span>` : ''}${region ? `<span>${escapeHTML(region)}</span>` : ''}</div>
+    </li>`;
+  }).join('')}</ol>`;
+}
+
+export function refundDetails(trip, total = trip.price) {
+  const { name, earlyHours, earlyPercent, latePercent, cutoffMinutes } = refundRules(trip);
+  const departure = Date.parse(localDateTime(trip.date, trip.departure));
+  const rows = [
+    [`За ${earlyHours} ч и раньше`, earlyPercent, departure - earlyHours * 3600000],
+    [`Менее чем за ${earlyHours} ч, но не позднее чем за ${cutoffMinutes} минут до отправления`, latePercent, departure - cutoffMinutes * 60000],
+    [`Менее чем за ${cutoffMinutes} минут до отправления и позже`, 0, departure]
+  ];
+  return `<div class="fare-refund">
+    <p><strong>Тариф «${escapeHTML(name)}»</strong> · Демонстрационные условия</p>
+    <p>При добровольном возврате срок считают до отправления рейса по местному времени. Процент начисляют на полную оплаченную сумму заказа.</p>
+    ${total == null ? '' : `<p class="fare-example">Пример для билета за <strong>${rub(total)}</strong></p>`}
+    <dl>${rows.map(([label, percent, time]) => {
+      const example = total == null ? '' : `<span class="fare-amount"> · ${rub(refundFor(trip, total, time).refund)}</span>`;
+      return `<div><dt>${label}</dt><dd><strong>${percent}% к возврату</strong>${example}</dd></div>`;
+    }).join('')}</dl>
+  </div>`;
+}
+
+export function tripDetails(trip, { includeTimeline = true, includeCarrier = false, refundTotal = trip.price } = {}) {
   return `<div class="trip-details">
-    <p><strong>Посадка</strong> · ${trip.fromStation}, ${trip.fromAddress}</p>
-    <p><strong>Высадка</strong> · ${trip.toStation}, ${trip.toAddress}</p>
-    <details><summary>Остановки по пути</summary><ol class="stop-list">${trip.stops.map(stop => '<li><time datetime="' + stop.date + 'T' + stop.time + ':00+03:00">' + stop.time + ' · ' + dateLabel(stop.date, { day: 'numeric', month: 'short' }) + '</time><strong>' + stop.name + '</strong></li>').join('')}</ol></details>
-    <p>Время местное. Приезжайте за 20 минут и возьмите документ из билета.</p>
+    ${includeTimeline ? itinerary(trip) : ''}
+    ${includeCarrier ? carrierDetails(trip) : ''}
+    <p>Приезжайте за 20 минут и возьмите документ из билета.</p>
     <p>В демонстрационном тарифе ручная кладь включена, багаж оплачивается при посадке.</p>
-    <div class="doc-links">${documentButton('bag', 'Ограничения перевозки багажа')}${documentButton('refund', 'Условия возврата')}</div>
+    <section class="trip-refund"><h3>Возврат билета</h3>${refundDetails(trip, refundTotal)}</section>
+    <div class="doc-links">${documentButton('bag', 'Ограничения перевозки багажа')}<button type="button" class="text-link doc-link" data-trip-refund="${trip.id}" aria-haspopup="dialog">Условия возврата</button></div>
   </div>`;
 }
 
 export function tripCard(trip, lowest, canBuy = true) {
   const available = trip.seats > 0 && trip.price != null && canBuy;
-  const status = !canBuy ? 'Сохранённое расписание' : trip.seats === 0 ? 'Мест нет' : trip.price == null ? 'Есть рейс · цена уточняется' : trip.price === lowest ? 'Низкая цена' : 'Есть билеты';
+  const best = available && trip.price === lowest;
+  const status = !canBuy ? 'Сохранённое расписание' : trip.seats === 0 ? 'Мест нет' : trip.price == null ? 'Есть рейс · цена уточняется' : best ? 'Лучшая цена' : 'Есть билеты';
   return `<article class="trip-card" aria-label="Рейс в ${trip.departure}">
-    <div class="trip-top"><span class="status ${available ? 'available' : ''}">${status}</span><span class="carrier">${icon('bus')} ${demoCarrier}</span></div>
+    <div class="trip-top"><span class="status ${available ? 'available' : ''}${best ? ' best-price' : ''}">${best ? icon('ticket') : ''}${status}</span></div>
     ${timeLine(trip)}
+    ${carrierDetails(trip)}
     <div class="trip-bottom"><div><strong class="trip-price">${rub(trip.price)}</strong>${trip.price != null ? '<small>за 1 взрослого</small>' : ''}</div>${available ? '<button type="button" class="button primary" data-trip="' + trip.id + '">Выбрать</button>' : '<span class="trip-availability">' + (trip.seats === 0 && canBuy ? 'Распродан' : '') + '</span>'}</div>
     <details><summary>Детали рейса</summary>${tripDetails(trip)}</details>
   </article>`;
 }
+
+const resultsControl = (group, label, initial = '') => `<button type="button" class="button secondary results-control" data-result-control="${group}" aria-haspopup="dialog"><span class="results-control-label">${label}</span><span class="results-selection" data-result-value${initial ? '' : ' hidden'}>${initial}</span>${icon('next')}</button>`;
 
 export function dateStrip(route, date, scenario) {
   const start = date < today() ? today() : date;
@@ -146,25 +214,30 @@ export function dateStrip(route, date, scenario) {
 }
 
 export function resultsView(route, date = today()) {
-  const list = tripsFor(route, date);
+  const list = sortTrips(tripsFor(route, date));
+  const lowest = dayPrice(route, date);
   return page({ title: 'Автобус ' + titleFor(route) + ': расписание, цены и билеты', description: 'Расписание автобусов ' + titleFor(route) + ', время отправления, пункты посадки и прибытия.', path: routePath(route.from, route.to), pageType: 'route', route, body: `
     <div class="wrap journey" id="route-view" data-date="${date}">
       <div class="journey-header">
         <a class="text-link back-link" href="/avtobusy/">${icon('back')} Направления</a>
         <h1>Автобусы ${titleFor(route)}</h1>
-        <div class="journey-meta"><p data-route-date>${dateLabel(date, { weekday: 'long', day: 'numeric', month: 'long' })} · 1 взрослый</p><button class="text-link" type="button" data-edit-search>Изменить поиск</button></div>
+        <div class="journey-meta"><p data-route-date>${dateLabel(date, { weekday: 'long', day: 'numeric', month: 'long' })} · 1 взрослый</p><div class="journey-actions"><button class="text-link" type="button" data-edit-search>Изменить поиск</button>${supportButton()}</div></div>
       </div>
       <div id="route-search" class="inline-search" hidden>${searchFields(route, date)}</div>
       <section class="dates-panel" aria-label="Даты отправления">
         <div class="dates-title"><h2>Даты и цены</h2><button type="button" class="text-link" data-calendar>${icon('calendar')} Календарь</button></div>
         <div class="date-strip" data-date-strip>${dateStrip(route, date)}</div>
       </section>
-      <div class="tools-row">
-        <button type="button" class="button secondary" data-filters>${icon('sliders')} <span>Фильтры</span><span data-filter-count hidden></span></button>
-        <label class="sort-control"><span class="sr-only">Сортировка рейсов</span><select id="sort"><option value="departure">По отправлению</option><option value="price">Сначала дешевле</option><option value="duration">Быстрее в пути</option></select></label>
+      <div class="results-controls" role="group" aria-label="Сортировка и фильтры рейсов">
+        <div class="results-controls-grid">
+          ${resultsControl('sort', 'Сортировать', 'По цене')}
+          ${resultsControl('fromStation', 'Откуда')}
+          ${resultsControl('toStation', 'Куда')}
+          ${resultsControl('departurePeriod', 'Время отправления')}
+        </div>
+        <div class="results-filter-status"><label class="availability-switch"><input type="checkbox" role="switch" data-available-only><span>Только с билетами</span></label><button type="button" class="text-link" data-clear-filters hidden>Сбросить</button></div>
       </div>
-      <div data-active-filters class="active-filters" hidden></div>
-      <section aria-labelledby="trip-heading"><h2 class="results-heading" id="trip-heading">Рейсы на ${dateLabel(date)}</h2><p id="results-count" role="status" class="results-count">${list.length ? 'Рейсов: ' + list.length + ' · местное время' : 'Нет рейсов на выбранный день'}</p><div class="trip-list" id="trip-list">${list.map(trip => tripCard(trip, dayPrice(route, date))).join('') || '<div class="panel"><p>Выберите другую дату в календаре.</p></div>'}</div></section>
+      <section aria-labelledby="trip-heading"><h2 class="results-heading" id="trip-heading">Рейсы на ${dateLabel(date)}</h2><p id="results-count" role="status" class="results-count">${list.length ? 'Рейсов: ' + list.length + ' · местное время' : 'Нет рейсов на выбранный день'}</p><div class="trip-list" id="trip-list">${list.map(trip => tripCard(trip, lowest)).join('') || '<div class="panel"><p>Выберите другую дату в календаре.</p></div>'}</div></section>
       <section class="panel station-panel"><h2>Основные пункты маршрута</h2><p>${cities[route.from].name} · ${cities[route.from].station}, ${cities[route.from].address}</p><p>${cities[route.to].name} · ${cities[route.to].station}, ${cities[route.to].address}</p><p class="field-hint">Точные пункты отправления и прибытия указаны в карточке рейса.</p></section>
       <p class="schedule-note">Расписание и цены приведены для демонстрации. Дата расписания — ${dateLabel(today())}.</p>
       <nav class="related-links" aria-label="Ссылки по маршруту"><a href="${routePath(route.to, route.from)}">Обратно: ${titleFor({from: route.to, to: route.from})}</a><a href="/pomosh/posadka/">Как проходит посадка</a></nav>

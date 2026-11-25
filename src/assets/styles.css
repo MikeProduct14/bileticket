@@ -342,3 +342,146 @@ label.field select { display: block; margin-top: 4px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.checkout-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.checkout-toolbar .back-link { margin-bottom: 0; }
+.passenger-card { min-width: 0; }
+.passenger-card .inline-head { min-height: 44px; }
+.remove-passenger { color: var(--rust); }
+.passenger-fare {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, .8fr);
+  align-items: end;
+  gap: 8px 12px;
+  padding: 9px 0 14px;
+  color: var(--quiet);
+  font-size: 14px;
+}
+.passenger-fare > span { display: grid; align-self: center; }
+.passenger-fare strong { color: var(--ink); white-space: nowrap; }
+
+.form-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 8px 11px;
+}
+.checkout-field { min-width: 0; overflow-wrap: anywhere; }
+.checkout-field .select-trigger {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 49px;
+  padding: 8px 12px;
+  border: 1px solid #d6ddd5;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 16px;
+  text-align: left;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.select-trigger svg { width: 16px; height: 16px; transform: rotate(90deg); }
+.select-placeholder { color: var(--quiet); font-weight: 600; }
+.checkout-field input[aria-invalid=true],
+.checkout-field .select-trigger[aria-invalid=true] {
+  border-color: #ad4231;
+  box-shadow: 0 0 0 1px #ad4231;
+}
+
+.checkout-field .field-error {
+  position: relative;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  margin: 2px 0 6px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  color: #fff;
+  background: #222724;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.checkout-field .field-error::before { content: none; }
+.checkout-field .field-error::after {
+  position: absolute;
+  bottom: -4px;
+  left: 13px;
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  background: inherit;
+  content: '';
+}
+.checkout-field [data-input] { scroll-margin-block: 70px; }
+.option-sheet { height: fit-content; max-height: 80dvh; margin-block: auto; }
+.option-sheet .sheet-frame { max-height: inherit; }
+.option-list { display: grid; gap: 6px; }
+.option-choice {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  width: 100%;
+  padding: 8px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.option-choice[aria-pressed=true] { border-color: #bd8b7e; background: var(--rose); }
+.option-choice:hover { background: var(--paper); }
+
+.review-person {
+  margin-top: 10px;
+  padding-block: 10px 3px;
+  border-top: 1px solid var(--line);
+}
+.review-person h3 { font-size: 16px; }
+.purchase-consent {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+.purchase-consent[data-invalid=true] { border-color: #ad4231; background: #fdf0ed; }
+.consent-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; gap: 9px; }
+.consent-row input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--rust); }
+.consent-row label { cursor: pointer; display: block; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+.purchase-consent .doc-link { min-height: 44px; overflow-wrap: anywhere; }
+.purchase-consent .error { margin-inline-start: 31px; overflow-wrap: anywhere; }
+
+.journey h1, .hero h1, .content-page h1 { word-break: normal; text-wrap: balance; }
+.journey .price-list dd { white-space: nowrap; }
+.checkout .data-list dd, .checkout .field-hint { overflow-wrap: anywhere; }
+
+@media (max-width: 655px) {
+  .option-sheet {
+    inset: auto 0 0;
+    width: 100%;
+    margin: 0;
+    border-radius: 18px 18px 0 0;
+    max-height: min(80dvh, 600px);
+  }
+  .option-sheet .sheet-content { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+}

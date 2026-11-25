@@ -1,5 +1,10 @@
-import { cities, routePath, routesByPath, sitePath, today, offsetDate, dateLabel, validDate, rub, tripsFor, dayPrice, demoCarrier } from './data.js';
-import { icon, titleFor, escapeHTML, navLinks, documentButton, tripCard, tripDetails, timeLine, dateStrip } from './views.js';
+import { cities, routePath, routesByPath, sitePath, today, offsetDate, dateLabel, validDate, rub, tripsFor, dayPrice, refundFor, sortTrips } from './data.js';
+import { icon, titleFor, escapeHTML, navLinks, documentButton, tripCard, tripDetails, timeLine, dateStrip, supportButton, supportChannels, refundDetails as tripRefundDetails } from './views.js';
+import {
+  canAddPassenger, demoContacts, documentsByType, emptyDraft, examplePassenger, fieldId, genders,
+  hasAllSeats, inputField, passengerCard, peopleLabel, seatChoices, selectedOption, selectOptions,
+  totalFor, validationMessage
+} from './passengers.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -41,8 +46,9 @@ const params = () => new URLSearchParams(location.search);
 let date = routeView?.dataset.date || '';
 const initial = params().get('date');
 if (route && validDate(initial) && initial >= today()) date = initial;
-let filters = { available: false, period: '', from: '', to: '' };
-let sort = 'departure';
+const emptyFilters = () => ({ available: false, fromStation: [], toStation: [], departurePeriod: [] });
+let filters = emptyFilters();
+let sort = 'price';
 let scenario = '';
 let searching = false;
 let resultsScroll = 0;
@@ -50,7 +56,9 @@ let scheduleTimer;
 let resultState = '';
 let step = '';
 let booking;
-let formDraft = {};
+let formDraft = emptyDraft();
+const fieldErrors = new Map();
+let consentError = '';
 let renderedTrip = new Map();
 let stagedClose;
 
@@ -282,29 +290,70 @@ function setDate(value) {
   const url = new URL(location.href);
   url.searchParams.set('date', value);
   url.searchParams.delete('step');
-  if (url.href !== location.href) history.pushState({}, '', url);
+  if (url.href !== location.href) history.pushState({ scenario }, '', url);
   refreshResults();
 }
 
 const periods = { morning: 'До 12:00', afternoon: '12:00–17:59', evening: 'С 18:00' };
-const periodMatches = (departure, period) => !period ||
-  (period === 'morning' && departure < '12:00') ||
-  (period === 'afternoon' && departure >= '12:00' && departure < '18:00') ||
-  (period === 'evening' && departure >= '18:00');
+const sortLabels = { price: 'По цене', departure: 'По времени отправления', arrival: 'По времени прибытия' };
+const filterGroups = ['fromStation', 'toStation', 'departurePeriod'];
+const filterTitles = { sort: 'Сортировать', fromStation: 'Откуда', toStation: 'Куда', departurePeriod: 'Время отправления' };
+const periodFor = departure => departure < '12:00' ? 'morning' : departure < '18:00' ? 'afternoon' : 'evening';
 
 function currentTrips() {
   return tripsFor(route, date, scenario === 'offline' ? 'available' : scenario);
 }
 function filteredTrips(list, active) {
-  return list.filter(trip => (!active.available || (trip.seats > 0 && trip.price != null)) &&
-    periodMatches(trip.departure, active.period) && (!active.from || trip.fromStation === active.from) && (!active.to || trip.toStation === active.to));
+  const matches = (values, value) => !values.length || values.includes(value);
+  return list.filter(trip => (!active.available || (trip.seats > 0 && trip.price != null && scenario !== 'offline')) &&
+    matches(active.departurePeriod, periodFor(trip.departure)) && matches(active.fromStation, trip.fromStation) && matches(active.toStation, trip.toStation));
 }
-function sortTrips(list) {
-  return [...list].sort((a, b) => {
-    const tie = a.departure.localeCompare(b.departure);
-    if (sort === 'price') return (a.price ?? Infinity) - (b.price ?? Infinity) || tie;
-    return sort === 'duration' ? a.duration - b.duration || tie : tie;
-  });
+
+function resultOptions(group) {
+  if (group === 'sort') return Object.entries(sortLabels);
+  if (group === 'departurePeriod') return Object.entries(periods);
+  const stations = new Set(tripsFor(route, date, 'available').map(trip => trip[group]));
+  return [...stations].map(station => [station, station]);
+}
+
+function restoreResultsControls() {
+  const query = params();
+  sort = Object.hasOwn(sortLabels, query.get('sort')) ? query.get('sort') : 'price';
+  filters = emptyFilters();
+  filters.available = query.get('available') === '1';
+  for (const group of filterGroups) {
+    const selected = query.getAll(group);
+    filters[group] = resultOptions(group).map(([value]) => value).filter(value => selected.includes(value));
+  }
+  scenario = history.state?.scenario || (navigator.onLine ? '' : 'offline');
+}
+
+function saveResultsControls() {
+  const url = new URL(location.href);
+  const query = url.searchParams;
+  query.delete('sort');
+  query.delete('available');
+  if (sort !== 'price') query.set('sort', sort);
+  if (filters.available) query.set('available', '1');
+  for (const group of filterGroups) {
+    query.delete(group);
+    for (const value of filters[group]) query.append(group, value);
+  }
+  if (url.href !== location.href) history.pushState({ scenario }, '', url);
+  refreshResults({ loading: false });
+}
+
+function updateResultsControls() {
+  for (const control of $$('[data-result-control]', routeView)) {
+    const group = control.dataset.resultControl;
+    const selected = group === 'sort' ? [sortLabels[sort]] : filters[group].map(value => group === 'departurePeriod' ? periods[value] : value);
+    const summary = $('[data-result-value]', control);
+    summary.textContent = selected.join(' · ');
+    summary.hidden = !selected.length;
+    control.toggleAttribute('data-active', group === 'sort' ? sort !== 'price' : selected.length > 0);
+  }
+  $('[data-available-only]', routeView).checked = filters.available;
+  $('.results-filter-status [data-clear-filters]', routeView).hidden = !filters.available && !filterGroups.some(group => filters[group].length);
 }
 function resultsNote(title, copy, action) {
   return '<div class="panel empty-state"><span class="route-icon">' + icon('bus') + '</span><h3>' + title + '</h3><p>' + copy + '</p>' + action + '</div>';
@@ -329,17 +378,11 @@ function renderResults() {
   } else {
     strip.innerHTML = dateStrip(route, date, scenario);
   }
-  const labels = [filters.available && 'Только с билетами', periods[filters.period], filters.from, filters.to].filter(Boolean);
-  const count = $('[data-filter-count]');
-  count.hidden = !labels.length;
-  count.textContent = labels.length;
-  const active = $('[data-active-filters]');
-  active.hidden = !labels.length;
-  active.innerHTML = labels.map(label => '<span>' + escapeHTML(label) + '</span>').join('') + (labels.length ? '<button class="text-link" type="button" data-clear-filters>Сбросить</button>' : '');
+  updateResultsControls();
   const list = $('#trip-list');
   const caption = $('#results-count');
   const trips = currentTrips();
-  const visible = sortTrips(filteredTrips(trips, filters));
+  const visible = sortTrips(filteredTrips(trips, filters), sort);
   renderedTrip = new Map(visible.map(trip => [trip.id, trip]));
   if (scenario === 'error') {
     caption.textContent = 'Расписание недоступно';
@@ -366,47 +409,20 @@ function renderResults() {
   }
 }
 
-function openFilters() {
-  const stations = key => [...new Set(currentTrips().map(trip => trip[key]))];
-  const select = (name, label, options) => '<label class="field">' + label + '<select name="' + name + '"><option value="">Любой вариант</option>' +
-    options.map(([value, text]) => '<option value="' + escapeHTML(value) + '"' + (filters[name] === value ? ' selected' : '') + '>' + escapeHTML(text) + '</option>').join('') + '</select></label>';
-  sheet.open('Фильтры', '<form id="filter-form" class="form-stack"><label class="checkbox"><input type="checkbox" name="available"' + (filters.available ? ' checked' : '') + '> <span>Только рейсы с билетами</span></label>' +
-    select('period', 'Время отправления', Object.entries(periods)) +
-    (stations('fromStation').length > 1 ? select('from', 'Пункт посадки', stations('fromStation').map(value => [value, value])) : '') +
-    (stations('toStation').length > 1 ? select('to', 'Пункт высадки', stations('toStation').map(value => [value, value])) : '') +
-    '</form>', button('Сбросить', 'data-reset-stage', 'secondary') + button('Показать рейсы', 'data-apply-filters'), 'filter-sheet');
-  updateFilterCount();
+function openResultControl(group) {
+  const forSort = group === 'sort';
+  const selected = forSort ? [sort] : filters[group];
+  const choices = resultOptions(group).map(([value, label]) => `<label class="result-option">
+    <input type="${forSort ? 'radio' : 'checkbox'}" name="choice" value="${escapeHTML(value)}"${selected.includes(value) ? ' checked' : ''}>
+    <span>${escapeHTML(label)}</span></label>`).join('');
+  sheet.open(filterTitles[group], '<form id="result-options" aria-labelledby="sheet-title">' + choices + '</form>',
+    (forSort ? '' : button('Сбросить', 'data-reset-result-panel', 'secondary')) + button('Применить', `data-apply-result-control="${group}"`), 'results-sheet');
 }
-function draftFilters() {
-  const data = new FormData($('#filter-form'));
-  return { available: data.has('available'), period: data.get('period') || '', from: data.get('from') || '', to: data.get('to') || '' };
-}
-function updateFilterCount() {
-  $('[data-apply-filters]', dialog).textContent = 'Показать рейсы (' + filteredTrips(currentTrips(), draftFilters()).length + ')';
-}
-dialog.addEventListener('change', event => {
-  if (event.target.closest('#filter-form')) updateFilterCount();
-});
 
 const steps = ['seat', 'passenger', 'review', 'order'];
 const stageNames = ['Место', 'Пассажир', 'Проверка', 'Заказ'];
 const storageKey = sitePath('tuda-suda-demo-booking');
 const profileKey = sitePath('tuda-suda-demo-profile');
-const documentsByType = {
-  passport: { name: 'Паспорт РФ', hint: 'Например, 0102 003456', pattern: /^\d{4}\s?\d{6}$/, inputMode: 'numeric' },
-  foreign: { name: 'Иностранный паспорт', hint: 'Например, A00123456', pattern: /^[A-Z0-9]{5,16}$/i, inputMode: 'text' }
-};
-const namePattern = /^\p{L}+(?:[ '’\-]\p{L}+)*$/u;
-const demoFields = { lastName: 'Примеров', firstName: 'Иван', middleName: 'Иванович', birth: '17.06.1990', documentType: 'passport', documentNumber: '0102 003456', email: 'passenger@example.com', phone: '+7 900 000-00-00' };
-const fields = {
-  lastName: ['Фамилия', 'Как в документе'],
-  firstName: ['Имя', 'Как в документе'],
-  middleName: ['Отчество', '', 'text', 'text', '', false],
-  birth: ['Дата рождения', 'ДД.ММ.ГГГГ', 'text', 'numeric', 'bday'],
-  documentNumber: ['Серия и номер', '', 'text', 'numeric'],
-  email: ['Электронная почта', 'Например, name@example.com. Сюда придёт билет.', 'email', 'email', 'email'],
-  phone: ['Телефон', 'Например, +7 900 123-45-67. Для связи по рейсу.', 'tel', 'tel', 'tel']
-};
 
 function storeBooking() {
   try {
@@ -421,7 +437,17 @@ function loadBooking() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(storageKey));
     if (saved?.path === location.pathname && saved.date === date &&
-        tripsFor(route, date, 'available').some(trip => trip.id === saved.tripId)) return saved;
+        tripsFor(route, date, 'available').some(trip => trip.id === saved.tripId)) {
+      if (!Array.isArray(saved.passengers) || !saved.passengers.length) {
+        saved.passengers = [{ id: 1, seat: saved.seat ?? null }];
+        saved.nextPassengerId = 2;
+        delete saved.seat;
+      }
+      if (saved.passengers.some(person => !Number.isInteger(person?.id) || person.id < 1 ||
+          (person.seat !== null && !Number.isInteger(person.seat)))) return null;
+      saved.nextPassengerId = Math.max(...saved.passengers.map(person => person.id)) + 1;
+      return saved;
+    }
   } catch {
     return null;
   }
@@ -429,7 +455,9 @@ function loadBooking() {
 }
 
 function chosenTrip() {
-  return booking && tripsFor(route, booking.date, 'available').find(trip => trip.id === booking.tripId);
+  if (!booking) return null;
+  const trip = tripsFor(route, booking.date, 'available').find(item => item.id === booking.tripId);
+  return trip && { ...trip, price: booking.price, refundPolicy: booking.refundPolicy ?? trip.refundPolicy };
 }
 
 function profileStatus(next) {
@@ -446,7 +474,7 @@ function renderProfile() {
   if (!panel) return;
   const status = profileStatus();
   panel.innerHTML = status === 'active'
-    ? '<h2>Вы вошли в демопрофиль</h2><p>Доступны пример почты ' + demoFields.email + ' и тестовый телефон ' + demoFields.phone + '. При повторном оформлении их можно подставить и отредактировать.</p><a class="text-link" href="' + sitePath('/') + '">Найти рейс</a>' + button('Выйти', 'data-demo-signout', 'secondary')
+    ? '<h2>Вы вошли в демопрофиль</h2><p>Доступны пример почты ' + demoContacts.email + ' и тестовый телефон ' + demoContacts.phone + '. При повторном оформлении их можно подставить и отредактировать.</p><a class="text-link" href="' + sitePath('/') + '">Найти рейс</a>' + button('Выйти', 'data-demo-signout', 'secondary')
     : status === 'eligible'
       ? '<p>В предыдущем демозаказе было отмечено согласие. Для проверки повторной покупки войдите в демопрофиль с вымышленными контактами.</p>' + button('Войти в демопрофиль', 'data-demo-signin')
       : '<p>Демопрофиль становится доступен после оформления билета с согласием на сохранение контактов.</p><a class="text-link" href="' + sitePath('/') + '">Найти рейс</a>';
@@ -477,11 +505,14 @@ function startBooking(id) {
   resultsScroll = window.scrollY;
   history.replaceState({ ...history.state, resultsScroll, filters, sort, scenario }, '');
   booking = {
-    path: location.pathname, date, tripId: id, scenario, seat: null, lostSeat: null,
+    path: location.pathname, date, tripId: id, scenario, passengers: [{ id: 1, seat: null }], nextPassengerId: 2, lostSeat: null,
+    refundPolicy: trip.refundPolicy,
     price: trip.price, originalPrice: trip.price, reserveUntil: 0, orderId: null,
     status: '', returnStatus: '', profileOffered: false
   };
-  formDraft = {};
+  formDraft = emptyDraft();
+  fieldErrors.clear();
+  consentError = '';
   storeBooking();
   showStep('seat');
 }
@@ -503,14 +534,20 @@ function renderStep(next, { keepScroll = false } = {}) {
     return;
   }
   const trip = chosenTrip();
-  const heading = { seat: trip.seatMap ? 'Выберите место' : 'Место в автобусе', passenger: 'Данные пассажира', review: 'Проверьте заказ', order: 'Ваш заказ' };
+  const heading = { seat: trip.seatMap ? 'Выберите место' : 'Место в автобусе', passenger: 'Данные пассажиров', review: 'Проверьте заказ', order: 'Ваш заказ' };
   const back = { seat: 'К рейсам', passenger: 'К выбору места', review: 'К данным пассажира', order: 'К рейсам' };
   const stamp = step === 'order' ? 'Заказ ' + escapeHTML(booking.orderId || '') : titleFor(route) + ' · ' + dateLabel(date);
   const views = { seat: seatView, passenger: passengerView, review: reviewView, order: orderView };
-  checkoutView.innerHTML = '<div class="journey-header"><button class="text-link back-link" type="button" data-step-back>' + icon('back') + ' ' + back[step] + '</button><p class="journey-kicker">' + stamp + '</p><h1 id="checkout-heading" tabindex="-1">' + heading[step] + '</h1></div><ol class="stepper" aria-label="Шаги оформления">' +
+  checkoutView.innerHTML = '<div class="journey-header"><div class="checkout-toolbar"><button class="text-link back-link" type="button" data-step-back>' + icon('back') + ' ' + back[step] + '</button>' + supportButton() + '</div><p class="journey-kicker">' + stamp + '</p><h1 id="checkout-heading" tabindex="-1">' + heading[step] + '</h1></div><ol class="stepper" aria-label="Шаги оформления">' +
     stageNames.map((name, i) => '<li class="' + (i <= steps.indexOf(step) ? 'reached' : '') + '"' +
       (steps[i] === step ? ' aria-current="step"' : '') + '><span>' + (i < steps.indexOf(step) ? icon('check') : i + 1) + '</span>' + name + '</li>').join('') +
     '</ol>' + views[step](trip);
+  if (step === 'passenger') {
+    for (const input of $$('[data-input]', checkoutView)) {
+      if (fieldErrors.has(input.id)) setError(input, $('#' + input.id + '-error'), fieldErrors.get(input.id));
+    }
+  }
+  if (step === 'review') highlightConsent(consentError);
   if (!keepScroll) {
     window.scrollTo(0, 0);
     $('#checkout-heading').focus({ preventScroll: true });
@@ -518,91 +555,98 @@ function renderStep(next, { keepScroll = false } = {}) {
   syncReserve();
 }
 
+const seatPassenger = () => booking.passengers.find(person => !person.seat) || booking.passengers[0];
+const savedDraft = person => formDraft.passengers[person.id] ??= {};
+const hasPassengerDraft = () => booking.passengers.every(person => Boolean(savedDraft(person).firstName));
+
 function seatView(trip) {
-  const free = [2, 3, 5, 6, 8, 9, 11, 12, 13, 15, 16, 17, 18, 20].slice(0, trip.seats);
+  const passenger = seatPassenger();
+  const free = seatChoices(trip, booking, passenger);
   const grid = Array.from({ length: 20 }, (_, i) => {
     const number = i + 1;
-    const taken = !free.includes(number) || number === booking.lostSeat;
-    return '<button type="button" class="seat" data-seat="' + number + '" aria-pressed="' + (number === booking.seat) +
+    const taken = !free.includes(number);
+    return '<button type="button" class="seat" data-seat="' + number + '" aria-pressed="' + (number === passenger.seat) +
       '" aria-label="Место ' + number + (taken ? ', занято' : '') + '"' + (taken ? ' disabled' : '') + '>' + number + '</button>';
   }).join('');
-  const layout = trip.seatMap ? '<p>Выберите свободное место на схеме.</p><div class="bus-layout"><div class="bus-front">' + icon('bus') + '<span>Перед автобуса</span></div><div class="seat-grid">' + grid + '</div></div><div class="seat-legend"><span>Свободно</span><span>Занято</span><span>Выбрано</span></div>' :
+  const seatInstruction = booking.passengers.length > 1 ? 'Выберите место для пассажира ' + (booking.passengers.indexOf(passenger) + 1) + '.' : 'Выберите свободное место на схеме.';
+  const layout = trip.seatMap ? '<p>' + seatInstruction + '</p><div class="bus-layout"><div class="bus-front">' + icon('bus') + '<span>Перед автобуса</span></div><div class="seat-grid">' + grid + '</div></div><div class="seat-legend"><span>Свободно</span><span>Занято</span><span>Выбрано</span></div>' :
     '<p>Место назначит перевозчик. Его номер появится в билете после оформления.</p>';
   return '<div class="checkout-grid"><section class="panel">' +
     (booking.lostSeat ? '<div class="notice" role="status">Место ' + booking.lostSeat + ' уже занято. Выберите другое.</div>' : '') +
     (booking.status === 'expired' ? '<div class="notice" role="status">Срок резерва истёк. Выберите место и подтвердите его снова.</div>' : '') +
-    layout + '</section>' + summaryPanel(trip, button('Продолжить<span class="seat-total"> · ' + priceText(booking.price) + '</span>', 'data-reserve' + (trip.seatMap && !booking.seat ? ' disabled' : ''))) + '</div>';
-}
-
-function documentOptions() {
-  return Object.entries(documentsByType).map(([key, item]) => '<option value="' + key + '"' + ((formDraft.documentType || 'passport') === key ? ' selected' : '') + '>' + item.name + '</option>').join('');
-}
-function inputField(key) {
-  let [label, hint, type = 'text', inputMode = 'text', auto = 'off', required = true] = fields[key];
-  if (key === 'documentNumber') {
-    const config = documentsByType[formDraft.documentType || 'passport'];
-    hint = config.hint;
-    inputMode = config.inputMode;
-  }
-  return '<div class="field" data-field="' + key + '"><label for="' + key + '">' + label + (required ? ' <span class="required" aria-hidden="true">*</span>' : '') + '</label>' +
-    '<input id="' + key + '" type="' + type + '" name="' + key + '" inputmode="' + inputMode + '" autocomplete="' + auto + '" value="' + escapeHTML(formDraft[key] || '') + '" aria-describedby="' + key + '-hint ' + key + '-error"' + (required ? ' required' : '') + (key === 'middleName' && formDraft.noMiddleName ? ' disabled' : '') + '>' +
-    '<small id="' + key + '-hint" class="field-hint"' + (!hint ? ' hidden' : '') + '>' + hint + '</small><p class="error" id="' + key + '-error" hidden></p></div>';
+    layout + '</section>' + summaryPanel(trip, button('Продолжить<span class="seat-total"> · ' + priceText(totalFor(booking)) + '</span>', 'data-reserve' + (!hasAllSeats(trip, booking) ? ' disabled' : ''))) + '</div>';
 }
 
 function passengerView(trip) {
+  const addAvailable = canAddPassenger(trip, booking);
+  const cards = booking.passengers.map((person, index) => passengerCard(trip, booking, person, index, savedDraft(person))).join('');
   return '<div class="checkout-grid"><form id="passenger-form" class="form-stack" novalidate>' +
     '<div class="notice">Используйте вымышленные данные. ' + button('Заполнить примером', 'data-fill-demo', 'secondary') + '</div>' +
-    (booking.wasReloaded && !formDraft.firstName ? '<p class="notice">После обновления нужно заново заполнить личные данные. Рейс и место сохранены в этой вкладке.</p>' : '') +
+    (booking.wasReloaded ? '<p class="notice">После обновления нужно заново заполнить личные данные. Рейс и выбранные места сохранены в этой вкладке.</p>' : '') +
     (booking.status === 'expired' ? '<div class="notice" role="status">Срок резерва истёк. Данные анкеты сохранены. ' + button('Вернуться к месту', 'data-renew-seat', 'secondary') + '</div>' : '') +
-    '<section class="panel"><h2>Пассажир</h2><p class="field-hint">Один взрослый. Поля со звёздочкой обязательны.</p><div class="form-stack">' + inputField('lastName') + inputField('firstName') + inputField('middleName') +
-    '<label class="checkbox"><input type="checkbox" name="noMiddleName"' + (formDraft.noMiddleName ? ' checked' : '') + '><span>У меня нет отчества</span></label>' + inputField('birth') +
-    '<label class="field" for="documentType">Документ <span class="required" aria-hidden="true">*</span><select id="documentType" name="documentType" required>' + documentOptions() + '</select></label>' +
-    inputField('documentNumber') + '</div></section>' +
+    '<p class="field-hint">Поля со звёздочкой обязательны. Демооформление доступно для взрослых пассажиров.</p>' + cards +
+    button('Добавить пассажира', 'data-add-passenger' + (addAvailable ? '' : ' disabled'), 'secondary full') +
+    (addAvailable ? '' : '<p class="field-hint" role="status">Все доступные места на этом рейсе выбраны.</p>') +
     '<section class="panel"><h2>Контакты покупателя</h2><div class="form-stack">' +
     (profileStatus() === 'active' ? button('Подставить контакты из демопрофиля', 'data-fill-profile', 'secondary') : '') +
-    inputField('email') + inputField('phone') + '<label class="checkbox"><input type="checkbox" name="saveProfile"' + (formDraft.saveProfile ? ' checked' : '') + '><span>Сохранить почту и телефон для следующей покупки</span></label>' +
+    inputField('email', formDraft) + inputField('phone', formDraft) + '<label class="checkbox"><input type="checkbox" name="saveProfile"' + (formDraft.saveProfile ? ' checked' : '') + '><span>Сохранить почту и телефон для следующей покупки</span></label>' +
     documentButton('profile', 'Согласие на сохранение контактов') + '</div></section>' +
     '<button type="submit" class="button primary full">Проверить заказ</button></form>' + summaryPanel(trip) + '</div>';
 }
 
 function summaryPanel(trip, action = '') {
-  const fare = booking.price - 190;
+  const total = totalFor(booking);
+  const fee = 190 * booking.passengers.length;
   return '<aside class="panel summary-panel"><h2>Ваша поездка</h2>' + timeLine(trip) +
-    '<p class="field-hint">' + demoCarrier + ' · ' + (trip.seatMap ? booking.seat ? 'Место ' + booking.seat : 'Место ещё не выбрано' : 'Место назначит перевозчик') + '</p>' +
-    '<dl class="price-list"><div><dt>Билет · 1 взрослый</dt><dd>' + priceText(fare) + '</dd></div><div><dt>Сервисный сбор</dt><dd>' + priceText(190) + '</dd></div><div class="price-total"><dt>Итого</dt><dd>' + priceText(booking.price) + '</dd></div></dl>' +
+    '<p class="field-hint">' + escapeHTML(trip.carrier.name) + ' · <span data-selected-seats>' + seatSummary(trip) + '</span></p>' +
+    '<dl class="price-list"><div><dt>Билеты · ' + peopleLabel(booking.passengers.length) + '</dt><dd>' + priceText(total - fee) + '</dd></div><div><dt>Сервисный сбор</dt><dd>' + priceText(fee) + '</dd></div><div class="price-total"><dt>Итого</dt><dd>' + priceText(total) + '</dd></div></dl>' +
     '<p class="field-hint">Сбор включён. Багаж оплачивается при посадке.</p>' +
     (booking.reserveUntil && !booking.status ? '<p class="reserve-line">' + icon('clock') + ' <span data-reserve-time>Уточняем срок резерва</span></p>' : '') +
-    '<div class="doc-links">' + documentButton('bag', 'Ограничения перевозки багажа') + documentButton('refund', 'Условия возврата') + documentButton('purchase', 'Условия покупки электронных билетов') + '</div>' +
+    '<div class="doc-links">' + documentButton('bag', 'Ограничения перевозки багажа') + '<button type="button" class="text-link doc-link" data-booking-refund>Условия возврата</button>' + documentButton('purchase', 'Условия покупки электронных билетов') + '</div>' +
     (action ? '<div class="summary-action">' + action + '</div>' : '') + '</aside>';
 }
+
+function seatSummary(trip) {
+  if (!trip.seatMap) return 'Места назначит перевозчик';
+  const seats = booking.passengers.map(person => person.seat).filter(Boolean);
+  if (!seats.length) return 'Место ещё не выбрано';
+  return (seats.length === 1 ? 'Место ' : 'Места ') + seats.join(', ');
+}
+
 function reviewView(trip) {
   const fareChanged = booking.price !== booking.originalPrice && !booking.acceptedPrice;
-  const fullname = [formDraft.lastName, formDraft.firstName, !formDraft.noMiddleName && formDraft.middleName].filter(Boolean).join(' ');
-  const traveller = '<section class="panel review-passenger"><div class="inline-head"><h2>Пассажир и контакты</h2><button type="button" class="text-link" data-edit-passenger>Изменить</button></div>' +
-    '<dl class="data-list"><div><dt>Пассажир</dt><dd>' + escapeHTML(fullname) + '</dd></div><div><dt>Дата рождения</dt><dd>' + escapeHTML(formDraft.birth || '') + '</dd></div><div><dt>Документ</dt><dd>' +
-    documentsByType[formDraft.documentType || 'passport'].name + ' · •••• ' + escapeHTML((formDraft.documentNumber || '').slice(-4)) +
-    '</dd></div><div><dt>Получатель билета</dt><dd>' + escapeHTML(formDraft.email || '') + '</dd></div><div><dt>Телефон</dt><dd>' + escapeHTML(formDraft.phone || '') + '</dd></div></dl></section>';
+  const people = booking.passengers.map((person, index) => {
+    const draft = savedDraft(person);
+    const fullname = [draft.lastName, draft.firstName, draft.middleName].filter(Boolean).join(' ');
+    return '<div class="review-person"><h3>Пассажир ' + (index + 1) + '</h3><dl class="data-list"><div><dt>ФИО</dt><dd>' + escapeHTML(fullname) +
+      '</dd></div><div><dt>Дата рождения</dt><dd>' + escapeHTML(draft.birth || '') + '</dd></div><div><dt>Пол</dt><dd>' + (genders[draft.gender] || '') +
+      '</dd></div><div><dt>Документ</dt><dd>' + documentsByType[draft.documentType || 'passport'].name + ' · •••• ' + escapeHTML((draft.documentNumber || '').slice(-4)) +
+      '</dd></div><div><dt>Место</dt><dd>' + (person.seat || 'Назначит перевозчик') + '</dd></div></dl></div>';
+  }).join('');
+  const traveller = '<section class="panel review-passenger"><div class="inline-head"><h2>Пассажиры и контакты</h2><button type="button" class="text-link" data-edit-passenger>Изменить</button></div>' +
+    people + '<dl class="data-list"><div><dt>Электронная почта</dt><dd>' + escapeHTML(formDraft.email || '') + '</dd></div><div><dt>Телефон</dt><dd>' + escapeHTML(formDraft.phone || '') + '</dd></div></dl></section>';
   const payment = '<section class="panel form-stack review-payment"><h2>Оплата</h2><div class="pay-method">' + icon('card') + ' Демооплата картой</div><p class="field-hint">Тестовый платёж. Реквизиты карты вводить не нужно.</p>' +
-    '<label class="checkbox"><input type="checkbox" id="purchase-agree"' + (formDraft.purchaseAgree ? ' checked' : '') + ' aria-describedby="purchase-error"><span>Принимаю условия покупки</span></label>' +
-    documentButton('purchase', 'Условия покупки электронных билетов') + '<p class="error" id="purchase-error" hidden></p>' +
-    (fareChanged ? '<div class="notice" role="status">Цена изменилась: <del>' + priceText(booking.originalPrice) + '</del> → <strong>' + priceText(booking.price) + '</strong>. ' +
+    '<fieldset id="purchase-consent" class="purchase-consent"><legend class="sr-only">Согласие на покупку</legend><div class="consent-row"><input type="checkbox" id="purchase-agree"' + (formDraft.purchaseAgree ? ' checked' : '') + ' aria-describedby="purchase-error"><div><label for="purchase-agree">Принимаю условия покупки</label>' +
+    documentButton('purchase', 'Условия покупки электронных билетов') + '</div></div><p class="error" id="purchase-error" hidden></p></fieldset>' +
+    (fareChanged ? '<div class="notice" role="status">Цена изменилась: <del>' + priceText(totalFor(booking, booking.originalPrice)) + '</del> → <strong>' + priceText(totalFor(booking)) + '</strong>. ' +
       button('Принять новую цену', 'data-accept-price', 'secondary') + '</div>' : '') +
     (booking.status === 'expired' ? '<div class="notice" role="status">Срок резерва истёк. Подтвердите место заново. ' + button('Вернуться к месту', 'data-renew-seat', 'secondary') + '</div>' : '') +
     '<p class="error" data-pay-error hidden></p>' +
-    button('Оплатить ' + rub(booking.price), 'data-pay' + (fareChanged || booking.status === 'expired' ? ' disabled' : '')) + '</section>';
+    button('Оплатить ' + rub(totalFor(booking)), 'data-pay' + (fareChanged || booking.status === 'expired' ? ' disabled' : '')) + '</section>';
   return '<div class="checkout-grid review-grid">' + traveller + summaryPanel(trip) + payment + '</div>';
 }
 function orderView(trip) {
+  const single = booking.passengers.length === 1;
   const stage = {
     processing: ['Проверяем оплату', 'Запрос принят. Статус платежа обновится в этом заказе.', ''],
     pending: ['Проверяем оплату', 'Исход операции уточняется. Можно повторить проверку статуса в этом же заказе.', button('Проверить статус', 'data-check-status', 'secondary')],
     issuing: ['Билет оформляется', 'Демооплата подтверждена. Проверяем выдачу билета.', button('Обновить статус', 'data-check-status', 'secondary')],
     declined: ['Оплата отклонена', 'В демосценарии платёж не прошёл. Повторить оплату можно из проверки заказа.', button('Вернуться к оплате', 'data-retry-payment', 'secondary')],
-    issued: ['Билет оформлен', 'Демонстрационный билет. Детали поездки доступны ниже.', button('Открыть билет', 'data-ticket')]
+    issued: [single ? 'Билет оформлен' : 'Билеты оформлены', 'Детали демонстрационной поездки доступны ниже.', button(single ? 'Открыть билет' : 'Открыть билеты', 'data-ticket')]
   }[booking.status] || ['Заказ сохранён', 'Статус можно проверить здесь.', button('Проверить статус', 'data-check-status', 'secondary')];
   const refund = booking.status !== 'issued' ? '' :
     '<section class="panel form-stack"><h2>Возврат</h2>' + (booking.returnStatus ?
-      '<p role="status">' + (booking.returnStatus === 'complete' ? 'Тестовый возврат подтверждён · ' + priceText(booking.price) : 'Тестовый запрос на возврат в обработке') + '</p>' +
+      '<p role="status">' + (booking.returnStatus === 'complete' ? 'Тестовый возврат подтверждён · ' + priceText(booking.refundQuote?.refund ?? totalFor(booking)) : 'Тестовый запрос на возврат в обработке') + '</p>' +
       (booking.returnStatus !== 'complete' ? button('Проверить возврат', 'data-check-refund', 'secondary') : '') :
       '<p>Посмотрите условия для этого билета и тестовый расчёт.</p>' + button('Рассчитать возврат', 'data-refund', 'secondary')) + '</section>';
   const profile = booking.status === 'issued' && booking.profileOffered ? '<a href="' + sitePath('/profil/') + '" class="text-link">Открыть демопрофиль</a>' : '';
@@ -610,42 +654,119 @@ function orderView(trip) {
     stage[1] + '</p>' + stage[2] + '<a href="' + sitePath('/pomosh/vozvrat/') + '" class="text-link">Справка по заказу</a>' + profile + '</section>' + refund + '</div>' + summaryPanel(trip) + '</div>';
 }
 
-function checkField(key) {
-  const input = $('#' + key);
-  if (!input) return true;
-  const value = input.value.trim();
-  let message = '';
-  if (!input.disabled) {
-    if (input.required && !value) message = 'Заполните поле «' + fields[key][0] + '».';
-    else if (['lastName', 'firstName', 'middleName'].includes(key) && value && !namePattern.test(value)) message = 'Используйте буквы, пробел, дефис или апостроф.';
-    else if (key === 'birth') {
-      const [day, month, year] = value.split('.');
-      const birthday = [year, month, day].join('-');
-      if (!validDate(birthday) || birthday > today() || Number(year) < 1900) message = 'Введите действительную дату в формате ДД.ММ.ГГГГ.';
-      else {
-        const age = Number(date.slice(0, 4)) - Number(year) - Number(date.slice(5) < birthday.slice(5));
-        if (age < 18) message = 'На дату поездки пассажиру должно исполниться 18 лет для этого тарифа.';
-      }
-    } else if (key === 'documentNumber' && !documentsByType[formDraft.documentType || 'passport'].pattern.test(value)) {
-      message = 'Проверьте формат: ' + documentsByType[formDraft.documentType || 'passport'].hint.toLowerCase() + '.';
-    } else if (key === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) message = 'Введите электронную почту в формате name@example.com.';
-    else if (key === 'phone' && !/^\+?[\d()\-\s.]+$/.test(value)) message = 'Введите номер телефона, используя цифры и обычные разделители.';
-    else if (key === 'phone' && !/^\d{10,15}$/.test(value.replace(/\D/g, ''))) message = 'Проверьте номер: должно быть от 10 до 15 цифр.';
-  }
-  setError(input, $('#' + key + '-error'), message);
+function passengerFor(control) {
+  const id = Number(control.closest('[data-passenger]')?.dataset.passenger);
+  return booking.passengers.find(person => person.id === id);
+}
+
+function setFieldError(input, message) {
+  setError(input, $('#' + input.id + '-error'), message);
+  if (message) fieldErrors.set(input.id, message);
+  else fieldErrors.delete(input.id);
+}
+
+function checkField(input) {
+  const key = input.dataset.input;
+  const passenger = passengerFor(input);
+  const draft = passenger ? savedDraft(passenger) : formDraft;
+  const value = input.dataset.passengerSelect ? selectedOption(key, draft, passenger) : input.value.trim();
+  const message = validationMessage(key, value, draft, date);
+  setFieldError(input, message);
   return !message;
 }
 
 function verifyPassenger(event) {
   event.preventDefault();
-  const invalid = Object.keys(fields).filter(key => !checkField(key));
-  if (invalid.length) return $('#' + invalid[0]).focus();
+  if (booking.status === 'expired' || !hasAllSeats(chosenTrip(), booking)) return showStep('seat', true);
+  const invalid = $$('[data-input]', event.target).filter(input => !checkField(input));
+  if (invalid.length) return invalid[0].focus();
   booking.wasReloaded = false;
   if (booking.scenario === 'repriced' && booking.price === booking.originalPrice) {
     booking.price += 240;
   }
   storeBooking();
   showStep('review');
+}
+
+function highlightConsent(message) {
+  consentError = message;
+  const control = $('#purchase-agree');
+  setError(control, $('#purchase-error'), message);
+  if (message) $('#purchase-consent').dataset.invalid = 'true';
+  else delete $('#purchase-consent').dataset.invalid;
+}
+
+function updatePassengers(focusId) {
+  storeBooking();
+  renderStep('passenger', { keepScroll: true });
+  const target = document.getElementById(focusId);
+  (target || $('[data-add-passenger]')).focus();
+}
+
+function addPassenger() {
+  const trip = chosenTrip();
+  if (!canAddPassenger(trip, booking)) return;
+  const person = { id: booking.nextPassengerId++, seat: trip.seatMap ? seatChoices(trip, booking)[0] : null };
+  booking.passengers.push(person);
+  updatePassengers(fieldId('lastName', person));
+}
+
+function removePassenger(control) {
+  const person = passengerFor(control);
+  const index = booking.passengers.indexOf(person);
+  if (index < 1) return;
+  for (const input of $$('[data-input]', control.closest('[data-passenger]'))) fieldErrors.delete(input.id);
+  booking.passengers.splice(index, 1);
+  delete formDraft.passengers[person.id];
+  const adjacent = booking.passengers[Math.min(index, booking.passengers.length - 1)];
+  updatePassengers(fieldId('lastName', adjacent));
+}
+
+function openPassengerOptions(control) {
+  const person = passengerFor(control);
+  const draft = savedDraft(person);
+  const key = control.dataset.passengerSelect;
+  const trip = chosenTrip();
+  const selected = selectedOption(key, draft, person);
+  const title = { gender: 'Пол пассажира', documentType: 'Документ пассажира', seat: 'Место пассажира' }[key];
+  const choices = selectOptions(key, trip, booking, person).map(([value, label]) =>
+    '<button type="button" class="option-choice" data-passenger-choice="' + value + '" aria-pressed="' + (selected === value) + '">' +
+    '<span>' + label + '</span>' + (selected === value ? icon('check') : '') + '</button>').join('');
+  sheet.open(title, '<div class="option-list">' + choices + '</div>', '', 'option-sheet');
+  const buttons = $$('[data-passenger-choice]', dialog);
+  (buttons.find(option => option.dataset.passengerChoice === selected) || buttons[0])?.focus();
+}
+
+function changePassengerOption(value) {
+  const trigger = returnFocus;
+  const person = passengerFor(trigger);
+  const key = trigger.dataset.passengerSelect;
+  const draft = savedDraft(person);
+  if (!selectOptions(key, chosenTrip(), booking, person).some(([option]) => option === value)) return;
+  sheet.close(() => {
+    if (key === 'seat') person.seat = Number(value);
+    else {
+      if (key === 'documentType' && value !== selectedOption(key, draft, person)) {
+        draft.documentNumber = '';
+        fieldErrors.delete(fieldId('documentNumber', person));
+      }
+      draft[key] = value;
+    }
+    fieldErrors.delete(trigger.id);
+    updatePassengers(trigger.id);
+  });
+}
+
+let refundQuotePreview;
+function openRefundQuote() {
+  const trip = chosenTrip();
+  refundQuotePreview = refundFor(trip, totalFor(booking));
+  const { withholding, refund, available } = refundQuotePreview;
+  const totals = '<dl class="price-list"><div><dt>Удержание</dt><dd>' + priceText(withholding) +
+    '</dd></div><div class="price-total"><dt>К возврату</dt><dd>' + priceText(refund) + '</dd></div></dl>';
+  sheet.open('Расчёт возврата', tripRefundDetails(trip, null) + totals +
+    (available ? '' : '<p class="notice">Срок возврата по демотарифу истёк.</p>'),
+    available ? button('Подтвердить возврат', 'data-confirm-refund') : '', 'document-sheet');
 }
 
 let reserveClock;
@@ -671,11 +792,12 @@ function syncReserve() {
 
 function reserveSeat() {
   const trip = chosenTrip();
-  if (trip.seatMap && !booking.seat) return;
+  if (!hasAllSeats(trip, booking)) return;
   if (!navigator.onLine) return sheet.open('Нет связи', '<p>Проверьте подключение и повторите резерв. Выбранное место и данные останутся в оформлении.</p>');
   if (booking.scenario === 'seat-lost' && !booking.lostSeat && trip.seatMap) {
-    booking.lostSeat = booking.seat;
-    booking.seat = null;
+    const person = seatPassenger();
+    booking.lostSeat = person.seat;
+    person.seat = null;
     storeBooking();
     return renderStep('seat', { keepScroll: true });
   }
@@ -683,6 +805,7 @@ function reserveSeat() {
   booking.reserveUntil = Date.now() + (booking.scenario === 'expired' && !booking.didExpire ? 12 : 480) * 1000;
   if (booking.scenario === 'expired') booking.didExpire = true;
   formDraft.purchaseAgree = false;
+  consentError = '';
   storeBooking();
   showStep('passenger');
 }
@@ -697,9 +820,10 @@ function beginPayment() {
     return;
   }
   if (booking.price !== booking.originalPrice && !booking.acceptedPrice) return;
+  if (!hasAllSeats(chosenTrip(), booking)) return showStep('seat', true);
   const agreement = $('#purchase-agree');
   if (!formDraft.purchaseAgree) {
-    setError(agreement, $('#purchase-error'), 'Подтвердите согласие, чтобы перейти к оплате.');
+    highlightConsent('Подтвердите согласие, чтобы перейти к оплате.');
     return agreement.focus();
   }
   booking.status = 'processing';
@@ -725,32 +849,22 @@ function waitForPayment() {
 
 checkoutView?.addEventListener('input', event => {
   const input = event.target;
-  if (input.closest('#passenger-form') && input.name && input.type !== 'checkbox' && input.tagName !== 'SELECT') {
-    formDraft[input.name] = input.value.trim();
-    if (input.getAttribute('aria-invalid') === 'true') checkField(input.name);
+  if (input.matches('input[data-input]')) {
+    const passenger = passengerFor(input);
+    const draft = passenger ? savedDraft(passenger) : formDraft;
+    draft[input.dataset.input] = input.value.trim();
+    if (input.getAttribute('aria-invalid') === 'true') checkField(input);
   }
 });
 checkoutView?.addEventListener('focusout', event => {
-  if (event.target.value && event.target.closest('[data-field]')) checkField(event.target.name);
+  if (event.target.matches('input[data-input]') && event.target.value.trim()) checkField(event.target);
 });
 checkoutView?.addEventListener('change', event => {
   const input = event.target;
-  if (input.name === 'documentType') {
-    formDraft.documentType = input.value;
-    formDraft.documentNumber = '';
-    const target = $('#documentNumber');
-    target.value = '';
-    target.inputMode = documentsByType[input.value].inputMode;
-    $('#documentNumber-hint').textContent = documentsByType[input.value].hint;
-    setError(target, $('#documentNumber-error'), '');
-  } else if (input.name === 'noMiddleName') {
-    formDraft.noMiddleName = input.checked;
-    $('#middleName').disabled = input.checked;
-    if (input.checked) setError($('#middleName'), $('#middleName-error'), '');
-  } else if (input.name === 'saveProfile') formDraft.saveProfile = input.checked;
+  if (input.name === 'saveProfile') formDraft.saveProfile = input.checked;
   else if (input.id === 'purchase-agree') {
     formDraft.purchaseAgree = input.checked;
-    if (input.checked) setError(input, $('#purchase-error'), '');
+    if (input.checked) highlightConsent('');
   }
 });
 checkoutView?.addEventListener('submit', event => {
@@ -764,13 +878,8 @@ function restoreFromURL({ initialLoad = false } = {}) {
   const defaultDate = routeView.dataset.date >= currentDay ? routeView.dataset.date : currentDay;
   const restoredDate = validDate(requestedDate) && requestedDate >= currentDay ? requestedDate : defaultDate;
   const next = params().get('step');
-  if (history.state?.filters) {
-    filters = history.state.filters;
-    sort = history.state.sort || 'departure';
-    scenario = history.state.scenario || '';
-    $('#sort').value = sort;
-    $('#demo-scenario').value = scenario;
-  }
+  restoreResultsControls();
+  $('#demo-scenario').value = scenario;
   if (restoredDate !== date || initialLoad || !next) {
     date = restoredDate;
     setSearchDate(date);
@@ -788,7 +897,7 @@ function restoreFromURL({ initialLoad = false } = {}) {
       if (!initialLoad && next !== 'order') return showStep('', true);
       target = 'order';
     }
-    else if (next === 'review' && !formDraft.firstName) target = 'passenger';
+    else if (next === 'review' && !hasPassengerDraft()) target = 'passenger';
     if (!steps.includes(target) || (target === 'order' && !booking.orderId)) return showStep('', true);
     if (target !== next) showStep(target, true);
     else renderStep(target);
@@ -816,6 +925,7 @@ window.addEventListener('offline', () => {
 
 function applyScenario(value) {
   scenario = value;
+  history.replaceState({ ...history.state, scenario: value }, '');
   $('#demo-scenario').value = value;
   refreshResults();
 }
@@ -826,6 +936,11 @@ document.addEventListener('click', event => {
   const data = control.dataset;
   if ('menu' in data) sheet.open('Меню', '<nav class="menu-links" aria-label="Основная навигация">' + navLinks + '</nav>');
   else if ('close' in data) sheet.close();
+  else if ('support' in data) sheet.open('Связаться', supportChannels(), '', 'support-sheet');
+  else if ('tripRefund' in data) {
+    const trip = step && booking ? chosenTrip() : renderedTrip.get(data.tripRefund);
+    if (trip) sheet.open('Условия возврата', tripRefundDetails(trip), '', 'document-sheet');
+  }
   else if ('doc' in data) {
     const [title, sections] = documents[data.doc];
     sheet.open(title, '<p class="field-hint">Условия демонстрационного заказа</p>' + sections.map(([heading, body]) => '<section class="document-section"><h3>' + heading + '</h3><p>' + body + '</p></section>').join(''), '', 'document-sheet');
@@ -860,38 +975,57 @@ document.addEventListener('click', event => {
     if (navigator.onLine) applyScenario('');
     renderCalendar();
     setTimeout(() => { if (dialog.open && $('.calendar-nav', dialog)) renderCalendar(); }, 300);
-  } else if ('filters' in data) openFilters();
-  else if ('resetStage' in data) {
-    $$('select, input', $('#filter-form')).forEach(el => { if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
-    updateFilterCount();
-  } else if ('applyFilters' in data) {
-    filters = draftFilters();
-    sheet.close(renderResults);
+  } else if ('resultControl' in data) openResultControl(data.resultControl);
+  else if ('resetResultPanel' in data) {
+    $$('input[type="checkbox"]', $('#result-options')).forEach(input => { input.checked = false; });
+  } else if ('applyResultControl' in data) {
+    const group = data.applyResultControl;
+    const selected = new FormData($('#result-options')).getAll('choice');
+    control.disabled = true;
+    sheet.close(() => {
+      if (group === 'sort') sort = selected[0];
+      else filters[group] = selected;
+      saveResultsControls();
+    });
   } else if ('clearFilters' in data) {
-    filters = { available: false, period: '', from: '', to: '' };
-    renderResults();
+    filters = emptyFilters();
+    saveResultsControls();
+    $('[data-available-only]', routeView).focus({ preventScroll: true });
   } else if ('trip' in data) startBooking(data.trip);
   else if ('seat' in data) {
-    booking.seat = Number(data.seat);
+    const trip = chosenTrip();
+    const person = seatPassenger();
+    const seat = Number(data.seat);
+    if (!seatChoices(trip, booking, person).includes(seat)) return;
+    person.seat = seat;
     $$('[data-seat]', checkoutView).forEach(el => el.setAttribute('aria-pressed', String(el === control)));
-    $('[data-reserve]').disabled = false;
-    $('.summary-panel > p', checkoutView).textContent = demoCarrier + ' · Место ' + booking.seat;
+    $('[data-reserve]').disabled = !hasAllSeats(trip, booking);
+    $('[data-selected-seats]', checkoutView).textContent = seatSummary(trip);
     storeBooking();
   } else if ('reserve' in data) reserveSeat();
+  else if ('addPassenger' in data) addPassenger();
+  else if ('removePassenger' in data) removePassenger(control);
+  else if ('passengerSelect' in data) openPassengerOptions(control);
+  else if ('passengerChoice' in data) {
+    control.disabled = true;
+    changePassengerOption(data.passengerChoice);
+  }
   else if ('demoSignin' in data || 'demoSignout' in data) {
     profileStatus('demoSignin' in data ? 'active' : 'eligible');
     renderProfile();
     $('#profile-panel').setAttribute('tabindex', '-1');
     $('#profile-panel').focus();
   } else if ('fillProfile' in data) {
-    for (const key of ['email', 'phone']) {
-      formDraft[key] = demoFields[key];
+    for (const [key, value] of Object.entries(demoContacts)) {
+      formDraft[key] = value;
       $('#' + key).value = formDraft[key];
-      checkField(key);
+      checkField($('#' + key));
     }
     $('#email').focus();
   } else if ('fillDemo' in data) {
-    Object.assign(formDraft, demoFields, { noMiddleName: false });
+    booking.passengers.forEach((person, index) => Object.assign(savedDraft(person), examplePassenger(index)));
+    Object.assign(formDraft, demoContacts);
+    fieldErrors.clear();
     renderStep('passenger', { keepScroll: true });
     $('#lastName').focus({ preventScroll: true });
   } else if ('stepBack' in data) {
@@ -920,13 +1054,20 @@ document.addEventListener('click', event => {
     booking.retried = true;
     booking.status = '';
     storeBooking();
-    showStep(booking.reserveUntil > Date.now() && formDraft.firstName ? 'review' : 'seat', true);
+    showStep(booking.reserveUntil > Date.now() && hasPassengerDraft() ? 'review' : 'seat', true);
   } else if ('ticket' in data) {
     const ticket = chosenTrip();
-    sheet.open('Демонстрационный билет', '<p>Заказ ' + escapeHTML(booking.orderId) + '</p>' + timeLine(ticket) + tripDetails(ticket));
+    const title = booking.passengers.length === 1 ? 'Демонстрационный билет' : 'Демонстрационные билеты';
+    sheet.open(title, '<p>Заказ ' + escapeHTML(booking.orderId) + ' · ' + peopleLabel(booking.passengers.length) + '</p><p>' + seatSummary(ticket) + '</p>' +
+      tripDetails(ticket, { includeCarrier: true, refundTotal: null }), '', 'document-sheet');
+  } else if ('bookingRefund' in data) {
+    sheet.open('Условия возврата', tripRefundDetails(chosenTrip(), null), '', 'document-sheet');
   } else if ('refund' in data) {
-    sheet.open('Расчёт возврата', '<p>Тестовый расчёт для демонстрационного заказа.</p><dl class="price-list"><div><dt>Удержание</dt><dd>0 ₽</dd></div><div class="price-total"><dt>К возврату</dt><dd>' + priceText(booking.price) + '</dd></div></dl>', button('Подтвердить возврат', 'data-confirm-refund'), 'document-sheet');
+    openRefundQuote();
   } else if ('confirmRefund' in data) {
+    const freshQuote = refundFor(chosenTrip(), totalFor(booking));
+    if (!freshQuote.available || freshQuote.refund !== refundQuotePreview?.refund) return openRefundQuote();
+    booking.refundQuote = freshQuote;
     booking.returnStatus = 'pending';
     storeBooking();
     sheet.close(() => renderStep('order', { keepScroll: true }));
@@ -937,7 +1078,10 @@ document.addEventListener('click', event => {
   }
 });
 
-$('#sort')?.addEventListener('change', event => { sort = event.target.value; renderResults(); });
+$('[data-available-only]')?.addEventListener('change', event => {
+  filters.available = event.target.checked;
+  saveResultsControls();
+});
 $('#demo-scenario')?.addEventListener('change', event => applyScenario(event.target.value));
 if (history.state?.sheet) history.replaceState({ ...history.state, sheet: false }, '');
 restoreFromURL({ initialLoad: true });

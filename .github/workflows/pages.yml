@@ -25,6 +25,8 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: Test booking and refunds
+        run: node --test
       - name: Build current and archived versions
         run: node scripts/build-pages.mjs
       - uses: actions/upload-pages-artifact@v4
