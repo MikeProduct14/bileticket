@@ -11,7 +11,7 @@ if (base && !/^(\/[A-Za-z0-9-][A-Za-z0-9._-]*)+$/.test(base)) throw new Error('I
 const dist = resolve(root, values.out);
 await mkdir(join(dist, 'assets'), { recursive: true });
 await cp(join(root, 'src/assets'), join(dist, 'assets'), { recursive: true });
-for (const module of ['app.js', 'data.js', 'views.js', 'passengers.js']) {
+for (const module of ['app.js', 'data.js', 'views.js', 'passengers.js', 'schedules.js', 'carrier-schedules.js']) {
   await cp(join(root, 'src', module), join(dist, 'assets', module));
 }
 const pages = Object.entries(publicPages());

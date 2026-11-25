@@ -14,7 +14,7 @@ const host = argument('--host', '0.0.0.0');
 const port = Number(argument('--port', process.env.PORT || '4173'));
 const root = fileURLToPath(new URL('../src/', import.meta.url));
 const mime = { css: 'text/css', js: 'text/javascript', webp: 'image/webp', svg: 'image/svg+xml', ttf: 'font/ttf', txt: 'text/plain' };
-const modules = new Set(['app.js', 'data.js', 'views.js', 'passengers.js']);
+const modules = new Set(['app.js', 'data.js', 'views.js', 'passengers.js', 'schedules.js', 'carrier-schedules.js']);
 
 createServer(async (req, res) => {
   res.setHeader('X-Robots-Tag', 'noindex, nofollow');

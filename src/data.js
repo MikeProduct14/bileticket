@@ -1,10 +1,13 @@
+import { scheduleCities, servicePairs, serviceEndpoints, serviceSegments, operatorNames, minutesOf } from './schedules.js';
+
 export const cities = {
   stavropol: { name: 'Ставрополь', region: 'Ставропольский край', station: 'Автостанция Северная', address: 'проспект Кулакова, 18а', alternate: 'Центральный автовокзал', alternateAddress: 'улица Маршала Жукова, 27' },
   moskva: { name: 'Москва', region: 'Москва', station: 'Автовокзал Красногвардейский', address: 'Ореховый бульвар, 24, к. 1', alternate: 'Международный автовокзал Саларьево', alternateAddress: 'Киевское шоссе, 23-й километр' },
   sochi: { name: 'Сочи', region: 'Краснодарский край', station: 'Автовокзал Сочи', address: 'улица Горького, 56а' },
   anapa: { name: 'Анапа', region: 'Краснодарский край', station: 'Автовокзал Анапа', address: 'улица Красноармейская, 11' },
   novorossiysk: { name: 'Новороссийск', region: 'Краснодарский край', station: 'Автовокзал Новороссийск', address: 'улица Чайковского, 15' },
-  gelendzhik: { name: 'Геленджик', region: 'Краснодарский край', station: 'Верхний автовокзал', address: 'объездная улица, 3' }
+  gelendzhik: { name: 'Геленджик', region: 'Краснодарский край', station: 'Верхний автовокзал', address: 'объездная улица, 3' },
+  ...Object.fromEntries(Object.entries(scheduleCities).filter(([id]) => !['stavropol', 'moskva', 'sochi', 'anapa', 'novorossiysk', 'gelendzhik'].includes(id)))
 };
 
 const destinations = [
@@ -15,14 +18,41 @@ const destinations = [
   ['gelendzhik', 1790, 525, 'Черноморское побережье']
 ];
 
-export const routes = destinations.flatMap(([city, price, duration, region]) => [
+const demoRoutes = destinations.flatMap(([city, price, duration, region]) => [
   { from: city, to: 'stavropol', price, duration, region },
   { from: 'stavropol', to: city, price, duration, region }
 ]);
+const pairKey = (from, to) => from + '/' + to;
+const canonical = new Map(demoRoutes.map(route => [pairKey(route.from, route.to), {
+  ...route, hasSchedule: servicePairs.has(pairKey(route.from, route.to))
+}]));
+for (const key of [...serviceEndpoints, 'lazarevskoe/sochi', 'sochi/lazarevskoe', 'gelendzhik/novorossiysk', 'novorossiysk/gelendzhik']) {
+  if (canonical.has(key) || !servicePairs.has(key)) continue;
+  const [from, to] = key.split('/');
+  canonical.set(key, { from, to, region: cities[to].region, hasSchedule: true });
+}
+export const routes = [...canonical.values()];
+export function findRoute(from, to) {
+  const key = pairKey(from, to);
+  return canonical.get(key) || (servicePairs.has(key) ? { from, to, region: cities[to].region, hasSchedule: true } : null);
+}
 export const siteBase = typeof window === 'undefined' ? '' : new URL('../', import.meta.url).pathname.replace(/\/$/, '');
 export const sitePath = path => siteBase + path;
 export const routePath = (from, to) => sitePath('/avtobusy/' + from + '/' + to + '/');
 export const routesByPath = Object.fromEntries(routes.map(route => [routePath(route.from, route.to), route]));
+export const searchPath = () => sitePath('/avtobusy/poisk/');
+export function resultHref(route, date) {
+  const query = new URLSearchParams();
+  const isCanonical = canonical.has(pairKey(route.from, route.to));
+  if (!isCanonical) {
+    query.set('from', route.from);
+    query.set('to', route.to);
+  }
+  if (date) query.set('date', date);
+  const path = isCanonical ? routePath(route.from, route.to) : searchPath();
+  return path + (query.size ? '?' + query : '');
+}
+export const isReferenceSchedule = (route, scenario = '') => Boolean(route?.hasSchedule && (!scenario || route.price == null));
 export const demoCarrier = 'Демо‑перевозчик';
 const carriers = [
   { name: 'Южная линия Экспресс', rating: 4.7, reviews: 128 },
@@ -100,15 +130,41 @@ export function refundFor(trip, total, now = Date.now()) {
 
 export function sortTrips(list, order = 'price') {
   return [...list].sort((a, b) => {
-    const departure = (a.date + a.departure).localeCompare(b.date + b.departure);
+    const clock = (trip, dateKey, timeKey) => trip[timeKey] == null ? '\uffff' : trip[dateKey] + trip[timeKey];
+    const departure = clock(a, 'date', 'departure').localeCompare(clock(b, 'date', 'departure'));
     if (order === 'price') return (a.price ?? Infinity) - (b.price ?? Infinity) || departure;
-    if (order === 'arrival') return (a.arrivalDate + a.arrival).localeCompare(b.arrivalDate + b.arrival) || departure;
+    if (order === 'arrival') return clock(a, 'arrivalDate', 'arrival').localeCompare(clock(b, 'arrivalDate', 'arrival')) || departure;
     return departure;
+  });
+}
+
+function scheduleTrips(route, date) {
+  return serviceSegments(route.from, route.to).map(({ service, start, end }) => {
+    const from = service.stops[start];
+    const to = service.stops[end];
+    const arrivalDay = from.day == null || to.day == null ? null : to.day - from.day;
+    const duration = arrivalDay == null ? null : arrivalDay * 1440 + minutesOf(to.time) - minutesOf(from.time);
+    return {
+      id: service.id + '-' + start + '-' + end,
+      route, date, departure: from.time, arrival: to.time,
+      arrivalDate: arrivalDay == null ? date : offsetDate(date, arrivalDay), arrivalDay, duration,
+      fromStation: from.station || 'Пункт уточняется', fromOnRequest: Boolean(from.onRequest),
+      toStation: to.station || 'Пункт уточняется', toOnRequest: Boolean(to.onRequest),
+      stops: service.stops.slice(start + 1, end).map(stop => ({
+        ...stop, name: stop.city, day: stop.day == null || from.day == null ? null : stop.day - from.day
+      })),
+      carrier: { name: operatorNames[service.carrier] },
+      scheduled: true, source: service.source, frequency: service.frequency, notes: service.notes,
+      terms: service.terms || [],
+      price: null, seats: null, seatMap: false
+    };
   });
 }
 
 export function tripsFor(route, date, scenario = '') {
   if (!route || !validDate(date)) return [];
+  if (isReferenceSchedule(route, scenario)) return scheduleTrips(route, date);
+  if (route.price == null) return [];
   const day = Number(date.slice(-2));
   if (scenario === 'empty' || (!scenario && day % 11 === 0)) return [];
   const allSold = scenario === 'sold' || (!scenario && day % 13 === 0);

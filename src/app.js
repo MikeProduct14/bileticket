@@ -1,5 +1,5 @@
-import { cities, routePath, routesByPath, sitePath, today, offsetDate, dateLabel, validDate, rub, tripsFor, dayPrice, refundFor, sortTrips } from './data.js';
-import { icon, titleFor, escapeHTML, navLinks, documentButton, tripCard, tripDetails, timeLine, dateStrip, supportButton, supportChannels, refundDetails as tripRefundDetails } from './views.js';
+import { cities, routesByPath, sitePath, today, offsetDate, dateLabel, validDate, rub, tripsFor, dayPrice, refundFor, sortTrips, searchPath, findRoute, resultHref, isReferenceSchedule } from './data.js';
+import { icon, titleFor, escapeHTML, navLinks, documentButton, tripCard, tripDetails, timeLine, dateStrip, supportChannels, resultsContent, refundDetails as tripRefundDetails } from './views.js';
 import {
   canAddPassenger, demoContacts, documentsByType, emptyDraft, examplePassenger, fieldId, genders,
   hasAllSeats, inputField, passengerCard, peopleLabel, seatChoices, selectedOption, selectOptions,
@@ -38,14 +38,20 @@ const documents = {
   ]]
 };
 
-const route = routesByPath[location.pathname];
+const params = () => new URLSearchParams(location.search);
+const initial = params().get('date');
+const chosenDate = validDate(initial) && initial >= today() ? initial : today();
+const route = routesByPath[location.pathname] ||
+  (location.pathname === searchPath() ? findRoute(params().get('from'), params().get('to')) : null);
+const resultsHost = $('#search-results');
+if (resultsHost && route) {
+  resultsHost.innerHTML = resultsContent(route, chosenDate);
+  document.title = 'Автобусы ' + titleFor(route) + ' — Туда‑сюда';
+}
 const routeView = $('#route-view');
 const checkoutView = $('#checkout');
 const search = $('#search-form');
-const params = () => new URLSearchParams(location.search);
-let date = routeView?.dataset.date || '';
-const initial = params().get('date');
-if (route && validDate(initial) && initial >= today()) date = initial;
+let date = route ? chosenDate : '';
 const emptyFilters = () => ({ available: false, fromStation: [], toStation: [], departurePeriod: [] });
 let filters = emptyFilters();
 let sort = 'price';
@@ -107,6 +113,32 @@ dialog.addEventListener('click', event => {
   }
 });
 
+const floatingSupport = $('[data-support]');
+let supportFrame;
+function placeSupport() {
+  if (supportFrame) return;
+  supportFrame = requestAnimationFrame(() => {
+    supportFrame = 0;
+    if (dialog.open || document.activeElement === floatingSupport) return;
+    const dock = floatingSupport.getBoundingClientRect();
+    const controls = $$('#main :is(.primary, .search-control, .results-control, .availability-switch, .checkout button, input:not([type=hidden]), select, textarea), .site-footer nav a');
+    const overlaps = controls.some(control => {
+      const bounds = control.getBoundingClientRect();
+      return bounds.width && bounds.height && bounds.left < dock.right && bounds.right > dock.left &&
+        bounds.top < dock.bottom && bounds.bottom > dock.top;
+    });
+    floatingSupport.toggleAttribute('data-obscured', overlaps);
+  });
+}
+if (floatingSupport) {
+  window.addEventListener('scroll', placeSupport, { passive: true });
+  window.addEventListener('resize', placeSupport);
+  window.visualViewport?.addEventListener('resize', placeSupport);
+  floatingSupport.addEventListener('blur', placeSupport);
+  new ResizeObserver(placeSupport).observe(document.body);
+  placeSupport();
+}
+
 function setError(element, error, message) {
   error.textContent = message;
   error.hidden = !message;
@@ -132,9 +164,18 @@ function chooseCity(input, id) {
 function queryCities(input) {
   const normalize = value => value.toLowerCase().replaceAll('ё', 'е').trim();
   const query = input.dataset.city ? '' : normalize(input.value);
-  const choices = Object.entries(cities).filter(([, city]) => normalize(city.name).includes(query));
+  const other = cityFields.find(field => field !== input)?.dataset.city;
+  const linked = id => input.id === 'from' ? findRoute(id, other) : findRoute(other, id);
+  const choices = Object.entries(cities).filter(([id, city]) =>
+    (query || !other || linked(id)) && [city.name, ...(city.aliases || [])].some(name => normalize(name).includes(query)));
+  if (query) {
+    choices.sort(([leftId, left], [rightId, right]) =>
+      Number(Boolean(linked(rightId))) - Number(Boolean(linked(leftId))) ||
+      Number(normalize(right.name).startsWith(query)) - Number(normalize(left.name).startsWith(query)) ||
+      left.name.localeCompare(right.name, 'ru'));
+  }
   const list = $('#' + input.id + '-options');
-  list.innerHTML = choices.map(([id, city]) => '<div id="' + input.id + '-opt-' + id + '" role="option" aria-selected="false" data-city-choice="' + id + '"><strong>' + city.name + '</strong><small>' + city.region + '</small></div>').join('') ||
+  list.innerHTML = choices.map(([id, city]) => '<div id="' + input.id + '-opt-' + id + '" role="option" aria-selected="false" data-city-choice="' + id + '"><strong>' + escapeHTML(city.name) + '</strong><small>' + escapeHTML(city.region) + '</small></div>').join('') ||
     '<div class="no-cities" role="presentation"><span role="status">Город не найден. Измените запрос.</span></div>';
   list.hidden = false;
   input.setAttribute('aria-expanded', 'true');
@@ -187,7 +228,7 @@ function setSearchDate(value) {
 
 function resolvePair() {
   const [from, to] = cityFields.map(input => input.dataset.city);
-  return routesByPath[routePath(from, to)];
+  return findRoute(from, to);
 }
 
 function verifySearch() {
@@ -216,7 +257,7 @@ search?.addEventListener('submit', event => {
   if (searching || !verifySearch()) return;
   const error = $('[data-search-error]', search);
   const destination = resolvePair();
-  const message = !destination ? 'Для этой пары городов нет демомаршрута. Выберите направление через Ставрополь.' :
+  const message = !destination ? 'Для этой пары пунктов нет расписания. Попробуйте выбрать другую остановку.' :
     !navigator.onLine ? 'Нет связи. Проверьте подключение и повторите поиск.' : '';
   error.textContent = message;
   error.hidden = !message;
@@ -225,7 +266,7 @@ search?.addEventListener('submit', event => {
   searching = true;
   submit.disabled = true;
   submit.textContent = 'Ищем рейсы…';
-  if (destination === route) {
+  if (route && destination.from === route.from && destination.to === route.to) {
     setTimeout(() => {
       searching = false;
       submit.disabled = false;
@@ -234,7 +275,7 @@ search?.addEventListener('submit', event => {
       setDate(searchDate);
     }, 220);
   } else {
-    const href = routePath(destination.from, destination.to) + '?date=' + searchDate;
+    const href = resultHref(destination, searchDate);
     setTimeout(() => location.assign(href), 200);
   }
 });
@@ -260,14 +301,15 @@ function renderCalendar() {
   const nextMonth = next.toISOString().slice(0, 10);
   const days = Number(offsetDate(nextMonth, -1).slice(-2));
   const activeScenario = calendarForResults || pair === route ? scenario : '';
+  const reference = isReferenceSchedule(pair, activeScenario);
   const cells = Array.from({ length: offset }, () => '<span></span>');
   for (let i = 0; i < days; i++) {
     const value = offsetDate(first, i);
-    const price = dayPrice(pair, value, activeScenario);
-    const trips = tripsFor(pair, value, activeScenario);
     const disabled = value < currentDay;
     let status = '';
-    if (pair && !disabled) {
+    if (pair && !disabled && !reference) {
+      const price = dayPrice(pair, value, activeScenario);
+      const trips = tripsFor(pair, value, activeScenario);
       if (resultState === 'loading' && pair === route) status = tracker.loading;
       else if (['error', 'offline'].includes(activeScenario)) status = tracker.error;
       else if (price != null) status = 'от ' + rub(price);
@@ -279,7 +321,7 @@ function renderCalendar() {
   sheet.open('Дата отправления', '<div class="calendar-nav">' +
     '<button type="button" class="icon-button" data-month="-1" aria-label="Предыдущий месяц"' + (first <= currentDay.slice(0, 7) + '-01' ? ' disabled' : '') + '>' + icon('prev') + '</button><strong>' + month +
     '</strong><button type="button" class="icon-button" data-month="1" aria-label="Следующий месяц">' + icon('next') + '</button></div><div class="calendar-grid"><div class="week" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div><div class="days">' +
-    cells.join('') + '</div></div>' + (pair ? '<p class="calendar-note">Цены «от» за одного взрослого. Цена рейса указана в карточке.</p>' : '<p class="calendar-note">Укажите города, чтобы увидеть цены на даты.</p>') +
+    cells.join('') + '</div></div>' + (reference ? '<p class="calendar-note">Дата используется для поиска. График и период действия указаны в карточках, отправление на выбранную дату не подтверждено.</p>' : pair ? '<p class="calendar-note">Цены «от» за одного взрослого. Цена рейса указана в карточке.</p>' : '<p class="calendar-note">Укажите города, чтобы выбрать направление.</p>') +
     (pair && ['error', 'offline'].includes(activeScenario) ? button('Повторить проверку', 'data-refresh-calendar', 'secondary') : ''), '', 'calendar-sheet');
   return nextMonth;
 }
@@ -298,7 +340,7 @@ const periods = { morning: 'До 12:00', afternoon: '12:00–17:59', evening: '�
 const sortLabels = { price: 'По цене', departure: 'По времени отправления', arrival: 'По времени прибытия' };
 const filterGroups = ['fromStation', 'toStation', 'departurePeriod'];
 const filterTitles = { sort: 'Сортировать', fromStation: 'Откуда', toStation: 'Куда', departurePeriod: 'Время отправления' };
-const periodFor = departure => departure < '12:00' ? 'morning' : departure < '18:00' ? 'afternoon' : 'evening';
+const periodFor = departure => departure == null ? '' : departure < '12:00' ? 'morning' : departure < '18:00' ? 'afternoon' : 'evening';
 
 function currentTrips() {
   return tripsFor(route, date, scenario === 'offline' ? 'available' : scenario);
@@ -312,12 +354,16 @@ function filteredTrips(list, active) {
 function resultOptions(group) {
   if (group === 'sort') return Object.entries(sortLabels);
   if (group === 'departurePeriod') return Object.entries(periods);
-  const stations = new Set(tripsFor(route, date, 'available').map(trip => trip[group]));
-  return [...stations].map(station => [station, station]);
+  const source = isReferenceSchedule(route, scenario) ? '' : 'available';
+  const stations = new Set(tripsFor(route, date, source).map(trip => trip[group]));
+  const city = cities[group === 'fromStation' ? route.from : route.to].name;
+  return [...stations].sort((a, b) => a.localeCompare(b, 'ru')).map(station => [station, source ? station : city + ' · ' + station]);
 }
 
 function restoreResultsControls() {
   const query = params();
+  scenario = history.state?.scenario || (navigator.onLine || route.hasSchedule ? '' : 'offline');
+  if (route.price == null) scenario = '';
   sort = Object.hasOwn(sortLabels, query.get('sort')) ? query.get('sort') : 'price';
   filters = emptyFilters();
   filters.available = query.get('available') === '1';
@@ -325,10 +371,9 @@ function restoreResultsControls() {
     const selected = query.getAll(group);
     filters[group] = resultOptions(group).map(([value]) => value).filter(value => selected.includes(value));
   }
-  scenario = history.state?.scenario || (navigator.onLine ? '' : 'offline');
 }
 
-function saveResultsControls() {
+function saveResultsControls({ render = true } = {}) {
   const url = new URL(location.href);
   const query = url.searchParams;
   query.delete('sort');
@@ -340,7 +385,7 @@ function saveResultsControls() {
     for (const value of filters[group]) query.append(group, value);
   }
   if (url.href !== location.href) history.pushState({ scenario }, '', url);
-  refreshResults({ loading: false });
+  if (render) refreshResults({ loading: false });
 }
 
 function updateResultsControls() {
@@ -362,8 +407,14 @@ function resultsNote(title, copy, action) {
 function refreshResults({ loading = true } = {}) {
   if (!route) return;
   clearTimeout(scheduleTimer);
-  $('[data-route-date]').textContent = dateLabel(date, { weekday: 'long', day: 'numeric', month: 'long' }) + ' · 1 взрослый';
-  $('#trip-heading').textContent = 'Рейсы на ' + dateLabel(date);
+  const reference = isReferenceSchedule(route, scenario);
+  $('[data-route-date]').textContent = dateLabel(date, { weekday: 'long', day: 'numeric', month: 'long' }) + (reference ? '' : ' · 1 взрослый');
+  $('[data-dates-title]').textContent = reference ? 'Дата поездки' : 'Даты и цены';
+  $('[data-schedule-copy]').hidden = !reference;
+  $('[data-demo-note]').hidden = reference;
+  const demoToggle = $('[data-demo-preview]');
+  if (demoToggle) demoToggle.textContent = reference ? 'Показать деморейсы' : 'К расписанию перевозчиков';
+  $('#trip-heading').textContent = reference ? 'Расписание из документов' : 'Рейсы на ' + dateLabel(date);
   if (!loading) return renderResults();
   resultState = 'loading';
   $('#results-count').textContent = 'Проверяем расписание…';
@@ -384,7 +435,12 @@ function renderResults() {
   const trips = currentTrips();
   const visible = sortTrips(filteredTrips(trips, filters), sort);
   renderedTrip = new Map(visible.map(trip => [trip.id, trip]));
-  if (scenario === 'error') {
+  if (isReferenceSchedule(route, scenario)) {
+    caption.textContent = 'Вариантов: ' + visible.length + ' · местное время';
+    list.innerHTML = visible.length ? visible.map(trip => tripCard(trip, null, false)).join('') :
+      resultsNote(filters.available ? 'Продажа по этому расписанию не подтверждена' : 'По фильтрам ничего не найдено',
+        'Снимите фильтры, чтобы увидеть справочное расписание.', button('Сбросить фильтры', 'data-clear-filters'));
+  } else if (scenario === 'error') {
     caption.textContent = 'Расписание недоступно';
     list.innerHTML = resultsNote('Не удалось загрузить рейсы', 'Проверьте подключение и повторите запрос. Направление и дата сохранены.', button('Повторить', 'data-retry'));
   } else if (!trips.length) {
@@ -538,7 +594,7 @@ function renderStep(next, { keepScroll = false } = {}) {
   const back = { seat: 'К рейсам', passenger: 'К выбору места', review: 'К данным пассажира', order: 'К рейсам' };
   const stamp = step === 'order' ? 'Заказ ' + escapeHTML(booking.orderId || '') : titleFor(route) + ' · ' + dateLabel(date);
   const views = { seat: seatView, passenger: passengerView, review: reviewView, order: orderView };
-  checkoutView.innerHTML = '<div class="journey-header"><div class="checkout-toolbar"><button class="text-link back-link" type="button" data-step-back>' + icon('back') + ' ' + back[step] + '</button>' + supportButton() + '</div><p class="journey-kicker">' + stamp + '</p><h1 id="checkout-heading" tabindex="-1">' + heading[step] + '</h1></div><ol class="stepper" aria-label="Шаги оформления">' +
+  checkoutView.innerHTML = '<div class="journey-header"><button class="text-link back-link" type="button" data-step-back>' + icon('back') + ' ' + back[step] + '</button><p class="journey-kicker">' + stamp + '</p><h1 id="checkout-heading" tabindex="-1">' + heading[step] + '</h1></div><ol class="stepper" aria-label="Шаги оформления">' +
     stageNames.map((name, i) => '<li class="' + (i <= steps.indexOf(step) ? 'reached' : '') + '"' +
       (steps[i] === step ? ' aria-current="step"' : '') + '><span>' + (i < steps.indexOf(step) ? icon('check') : i + 1) + '</span>' + name + '</li>').join('') +
     '</ol>' + views[step](trip);
@@ -917,7 +973,7 @@ window.addEventListener('popstate', () => {
   restoreFromURL();
 });
 window.addEventListener('offline', () => {
-  if (!route || step) return;
+  if (!route || step || isReferenceSchedule(route, scenario)) return;
   scenario = 'offline';
   $('#demo-scenario').value = scenario;
   refreshResults({ loading: false });
@@ -927,6 +983,11 @@ function applyScenario(value) {
   scenario = value;
   history.replaceState({ ...history.state, scenario: value }, '');
   $('#demo-scenario').value = value;
+  for (const group of ['fromStation', 'toStation']) {
+    const allowed = resultOptions(group).map(([station]) => station);
+    filters[group] = filters[group].filter(station => allowed.includes(station));
+  }
+  saveResultsControls({ render: false });
   refreshResults();
 }
 
@@ -936,7 +997,10 @@ document.addEventListener('click', event => {
   const data = control.dataset;
   if ('menu' in data) sheet.open('Меню', '<nav class="menu-links" aria-label="Основная навигация">' + navLinks + '</nav>');
   else if ('close' in data) sheet.close();
-  else if ('support' in data) sheet.open('Связаться', supportChannels(), '', 'support-sheet');
+  else if ('support' in data) {
+    control.focus({ preventScroll: true });
+    sheet.open('Связаться', supportChannels(), '', 'support-sheet');
+  }
   else if ('tripRefund' in data) {
     const trip = step && booking ? chosenTrip() : renderedTrip.get(data.tripRefund);
     if (trip) sheet.open('Условия возврата', tripRefundDetails(trip), '', 'document-sheet');
@@ -970,7 +1034,8 @@ document.addEventListener('click', event => {
     inline.hidden = !inline.hidden;
     control.setAttribute('aria-expanded', String(!inline.hidden));
     if (!inline.hidden) $('#from').focus();
-  } else if ('retry' in data) applyScenario(navigator.onLine ? '' : 'offline');
+  } else if ('demoPreview' in data) applyScenario(isReferenceSchedule(route, scenario) ? 'available' : '');
+  else if ('retry' in data) applyScenario(navigator.onLine ? 'available' : 'offline');
   else if ('refreshCalendar' in data) {
     if (navigator.onLine) applyScenario('');
     renderCalendar();
