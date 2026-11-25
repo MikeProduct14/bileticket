@@ -255,8 +255,10 @@ for (const input of cityFields) {
 }
 
 let searchDate = date;
-function setSearchDate(value) {
+let pricedSearchRoute;
+function setSearchDate(value, previewRoute) {
   searchDate = value;
+  pricedSearchRoute = previewRoute;
   if (!search) return;
   $('[data-date-label]', search).textContent = value ? dateLabel(value) : 'Выберите дату';
   $$('[data-offset]', search).forEach(el => el.setAttribute('aria-pressed', String(offsetDate(today(), Number(el.dataset.offset)) === value)));
@@ -299,6 +301,7 @@ search?.addEventListener('submit', event => {
   error.textContent = message;
   error.hidden = !message;
   if (message) return;
+  const useDemo = destination === pricedSearchRoute;
   const submit = $('[type=submit]', search);
   searching = true;
   submit.disabled = true;
@@ -309,59 +312,89 @@ search?.addEventListener('submit', event => {
       submit.disabled = false;
       submit.innerHTML = icon('search') + ' Найти рейсы';
       $('#route-search').hidden = true;
+      if (useDemo) applyScenario('available');
       setDate(searchDate);
     }, 220);
   } else {
-    const href = resultHref(destination, searchDate);
+    const href = resultHref(destination, searchDate) + (useDemo ? '&demo=1' : '');
     setTimeout(() => location.assign(href), 200);
   }
 });
 
 let calendarMonth;
 let calendarForResults;
+const wideCalendar = matchMedia('(min-width: 881px)');
+const firstOfMonth = value => value.slice(0, 7) + '-01';
+
+function shiftMonth(first, amount) {
+  const shifted = new Date(first + 'T12:00:00Z');
+  shifted.setUTCMonth(shifted.getUTCMonth() + amount);
+  return shifted.toISOString().slice(0, 10);
+}
+
 function openCalendar(fromForm) {
   calendarForResults = !fromForm;
-  calendarMonth = (fromForm ? searchDate : date) || today();
+  calendarMonth = firstOfMonth((fromForm ? searchDate : date) || today());
   renderCalendar();
 }
 
-function renderCalendar() {
-  const selected = calendarForResults ? date : searchDate;
+function calendarContext() {
   const currentDay = today();
   const pair = calendarForResults ? route : resolvePair();
-  const first = calendarMonth.slice(0, 7) + '-01';
-  const start = new Date(first + 'T12:00:00Z');
-  const offset = (start.getUTCDay() + 6) % 7;
-  const month = dateLabel(first, { month: 'long', year: 'numeric' });
-  const next = new Date(start);
-  next.setUTCMonth(next.getUTCMonth() + 1);
-  const nextMonth = next.toISOString().slice(0, 10);
-  const days = Number(offsetDate(nextMonth, -1).slice(-2));
-  const activeScenario = calendarForResults || pair === route ? scenario : '';
-  const reference = isReferenceSchedule(pair, activeScenario);
+  const selected = calendarForResults ? date : searchDate;
+  const currentScenario = calendarForResults || pair === route ? scenario : '';
+  const demoPreview = !calendarForResults && pair?.price != null && isReferenceSchedule(pair, currentScenario);
+  const activeScenario = demoPreview ? 'available' : currentScenario;
+  return { currentDay, pair, selected, activeScenario, demoPreview, reference: isReferenceSchedule(pair, activeScenario) };
+}
+
+function renderMonth(first, { currentDay, pair, selected, activeScenario, reference }) {
+  const offset = (new Date(first + 'T12:00:00Z').getUTCDay() + 6) % 7;
+  const days = Number(offsetDate(shiftMonth(first, 1), -1).slice(-2));
   const cells = Array.from({ length: offset }, () => '<span></span>');
   for (let i = 0; i < days; i++) {
     const value = offsetDate(first, i);
     const disabled = value < currentDay;
     let status = '';
+    let price;
     if (pair && !disabled && !reference) {
-      const price = dayPrice(pair, value, activeScenario);
-      const trips = tripsFor(pair, value, activeScenario);
       if (resultState === 'loading' && pair === route) status = tracker.loading;
       else if (['error', 'offline'].includes(activeScenario)) status = tracker.error;
-      else if (price != null) status = 'от ' + rub(price);
-      else if (trips.some(trip => trip.seats)) status = tracker.error;
-      else status = trips.length ? tracker.disable : tracker.empty;
+      else {
+        price = dayPrice(pair, value, activeScenario);
+        if (price != null) status = rub(price);
+        else {
+          const trips = tripsFor(pair, value, activeScenario);
+          status = trips.some(trip => trip.seats) ? tracker.error : trips.length ? tracker.disable : tracker.empty;
+        }
+      }
     }
-    cells.push('<button type="button" class="calendar-day" data-pick-date="' + value + '" aria-label="' + dateLabel(value) + (status ? ', ' + status : '') + '" aria-pressed="' + (value === selected) + '"' + (value === currentDay ? ' aria-current="date"' : '') + (disabled ? ' disabled' : '') + '><strong>' + (i + 1) + '</strong>' + (status ? '<small>' + status + '</small>' : '') + '</button>');
+    const label = dateLabel(value, { day: 'numeric', month: 'long', year: 'numeric' }) + (status ? (price == null ? ', ' : ', от ') + status : '');
+    cells.push('<button type="button" class="calendar-day" data-pick-date="' + value + '"' + (price == null ? '' : ' data-priced') + ' aria-label="' + label + '" aria-pressed="' + (value === selected) + '"' + (value === currentDay ? ' aria-current="date"' : '') + (disabled ? ' disabled' : '') + '><strong>' + (i + 1) + '</strong>' + (status ? '<small>' + status + '</small>' : '') + '</button>');
   }
-  sheet.open('Дата отправления', '<div class="calendar-nav">' +
-    '<button type="button" class="icon-button" data-month="-1" aria-label="Предыдущий месяц"' + (first <= currentDay.slice(0, 7) + '-01' ? ' disabled' : '') + '>' + icon('prev') + '</button><strong>' + month +
-    '</strong><button type="button" class="icon-button" data-month="1" aria-label="Следующий месяц">' + icon('next') + '</button></div><div class="calendar-grid"><div class="week" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div><div class="days">' +
-    cells.join('') + '</div></div>' + (reference ? '<p class="calendar-note">Дата используется для поиска. График и период действия указаны в карточках, отправление на выбранную дату не подтверждено.</p>' : pair ? '<p class="calendar-note">Цены «от» за одного взрослого. Цена рейса указана в карточке.</p>' : '<p class="calendar-note">Укажите города, чтобы выбрать направление.</p>') +
-    (pair && ['error', 'offline'].includes(activeScenario) ? button('Повторить проверку', 'data-refresh-calendar', 'secondary') : ''), '', 'calendar-sheet');
-  return nextMonth;
+  return '<section class="calendar-grid" aria-labelledby="calendar-' + first + '"><h3 id="calendar-' + first + '">' + dateLabel(first, { month: 'long', year: 'numeric' }) +
+    '</h3><div class="week" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div><div class="days">' + cells.join('') + '</div></section>';
 }
+
+function renderCalendar() {
+  const context = calendarContext();
+  const { pair, currentDay, reference, demoPreview, activeScenario } = context;
+  const routeName = pair ? '<p class="calendar-route">' + escapeHTML(titleFor(pair)) + '</p>' : '';
+  const note = reference ? 'Для справочного расписания уточняйте цену и дату рейса у перевозчика.' :
+    demoPreview ? 'Минимальная демоцена за одного взрослого. Поиск по дате с ценой покажет деморейсы.' :
+    pair ? 'Минимальная демоцена за одного взрослого.' : cityFields.every(field => field.dataset.city) ?
+      'Для этой пары городов пока нет расписания.' : 'Выберите города отправления и прибытия, чтобы увидеть цены.';
+  const months = renderMonth(calendarMonth, context) + (wideCalendar.matches ? renderMonth(shiftMonth(calendarMonth, 1), context) : '');
+  sheet.open('Дата отправления', '<div class="calendar-toolbar">' + routeName + '<div class="calendar-nav">' +
+    '<button type="button" class="icon-button" data-month="-1" aria-label="Предыдущий месяц"' + (calendarMonth <= firstOfMonth(currentDay) ? ' disabled' : '') + '>' + icon('prev') + '</button>' +
+    '<strong class="calendar-mobile-month" aria-hidden="true">' + dateLabel(calendarMonth, { month: 'long', year: 'numeric' }) + '</strong>' +
+    '<button type="button" class="icon-button" data-month="1" aria-label="Следующий месяц">' + icon('next') + '</button></div></div><div class="calendar-months">' + months +
+    '</div><p class="calendar-note">' + note + '</p>' + (pair && ['error', 'offline'].includes(activeScenario) ? button('Повторить проверку', 'data-refresh-calendar', 'secondary') : ''), '', 'calendar-sheet');
+}
+
+wideCalendar.addEventListener('change', () => {
+  if (dialog.open && dialog.classList.contains('calendar-sheet')) renderCalendar();
+});
 
 function setDate(value) {
   date = value;
@@ -399,7 +432,8 @@ function resultOptions(group) {
 
 function restoreResultsControls() {
   const query = params();
-  scenario = history.state?.scenario || (navigator.onLine || route.hasSchedule ? '' : 'offline');
+  scenario = history.state?.scenario ?? (query.get('demo') === '1' && navigator.onLine ? 'available' :
+    navigator.onLine || route.hasSchedule ? '' : 'offline');
   if (route.price == null) scenario = '';
   sort = Object.hasOwn(sortLabels, query.get('sort')) ? query.get('sort') : 'price';
   filters = emptyFilters();
@@ -1185,7 +1219,9 @@ window.addEventListener('offline', () => {
 
 function applyScenario(value) {
   scenario = value;
-  history.replaceState({ ...history.state, scenario: value }, '');
+  const url = new URL(location.href);
+  if (!value) url.searchParams.delete('demo');
+  history.replaceState({ ...history.state, scenario: value }, '', url);
   $('#demo-scenario').value = value;
   for (const group of ['fromStation', 'toStation']) {
     const allowed = resultOptions(group).map(([station]) => station);
@@ -1219,13 +1255,15 @@ document.addEventListener('click', event => {
   } else if ('offset' in data) setSearchDate(offsetDate(today(), Number(data.offset)));
   else if ('calendar' in data) openCalendar(Boolean(control.closest('form')));
   else if ('month' in data) {
-    const change = new Date(calendarMonth.slice(0, 7) + '-01T12:00:00Z');
-    change.setUTCMonth(change.getUTCMonth() + Number(data.month));
-    calendarMonth = change.toISOString().slice(0, 10);
+    calendarMonth = shiftMonth(calendarMonth, Number(data.month));
     renderCalendar();
     const newControl = $('[data-month="' + data.month + '"]', dialog);
     if (!newControl.disabled) newControl.focus();
-  } else if ('pickDate' in data) sheet.close(() => calendarForResults ? setDate(data.pickDate) : setSearchDate(data.pickDate));
+  } else if ('pickDate' in data) {
+    const { pair, demoPreview } = calendarContext();
+    const pricedPair = demoPreview && 'priced' in data ? pair : undefined;
+    sheet.close(() => calendarForResults ? setDate(data.pickDate) : setSearchDate(data.pickDate, pricedPair));
+  }
   else if ('day' in data) {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
