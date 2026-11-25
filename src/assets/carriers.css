@@ -1,0 +1,43 @@
+.carrier-page { max-width: 720px; }
+.carrier-page > h1 { margin-bottom: 8px; }
+.carrier-intro { color: var(--quiet); }
+
+.carrier-application {
+  gap: 14px;
+  margin-block: 20px 25px;
+  padding: clamp(14px, 4vw, 28px);
+}
+.carrier-application h2 { margin: 0 0 6px; }
+.carrier-application p { margin-top: 0; }
+.carrier-application .field-hint { font-weight: 550; }
+.carrier-application .field-hint + .field-hint { margin-top: 3px; }
+.carrier-application textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 104px;
+  resize: vertical;
+  border: 1px solid #d6ddd5;
+  border-radius: 10px;
+  padding: 8px 12px;
+  color: var(--ink);
+  background: var(--white);
+  font: inherit;
+  font-size: 16px;
+}
+.carrier-application textarea[aria-invalid=true] { border-color: #b54331; }
+.carrier-confirmation:empty { display: none; }
+.carrier-confirmation {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--mint);
+  color: var(--green);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.carrier-faq details { border-bottom: 1px solid var(--line); }
+.carrier-faq details p { margin: 0 0 11px; }
+
+@media (max-width: 500px) {
+  .carrier-application .button { width: 100%; }
+}

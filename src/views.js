@@ -35,9 +35,9 @@ export const titleFor = route => cities[route.from].name + ' — ' + cities[rout
 export const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 
 const brand = '<a class="brand" href="/" aria-label="Туда-сюда, главная"><span class="brand-mark">' + icon('route') + '</span><span>туда<span class="brand-dot">·</span>сюда</span></a>';
-const links = '<a href="/avtobusy/">Направления</a><a href="/pomosh/posadka/">Помощь</a>';
+const links = '<a href="/avtobusy/">Направления</a><a href="/vozvrat/">Вернуть билет</a><a href="/pomosh/posadka/">Помощь</a><a href="/perevozchikam/">Для перевозчиков</a>';
 export const header = '<header class="site-header"><div class="wrap header-inner">' + brand + '<nav class="desktop-nav" aria-label="Основная навигация">' + links + '</nav><button type="button" class="icon-button menu-toggle" data-menu aria-label="Открыть меню" aria-haspopup="dialog">' + icon('menu') + '</button></div></header>';
-const footer = '<footer class="site-footer"><div class="wrap footer-inner"><div>' + brand + '<p>Расписание из документов носит справочный характер. Оформление билетов демонстрационное.</p></div><nav aria-label="Ссылки в подвале">' + links + '<a href="/perevozchikam/">Перевозчикам</a></nav></div></footer>';
+const footer = '<footer class="site-footer"><div class="wrap footer-inner"><div>' + brand + '<p>Расписание из документов носит справочный характер. Оформление билетов демонстрационное.</p></div><nav aria-label="Ссылки в подвале">' + links + '</nav></div></footer>';
 
 export function page({ title, description, body, path = '/', pageType, route }) {
   return `<!doctype html>
@@ -52,6 +52,7 @@ export function page({ title, description, body, path = '/', pageType, route }) 
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/styles.css">
   ${pageType === 'route' ? '<link rel="stylesheet" href="/assets/results.css">' : ''}
+  ${pageType === 'carriers' ? '<link rel="stylesheet" href="/assets/carriers.css">' : ''}
   <title>${escapeHTML(title)}</title>
   <script type="module" src="/assets/app.js"></script>
 </head>
@@ -83,13 +84,19 @@ const directionsList = (selection = popular) => `<ul class="directions-list">${s
   '<li><a href="' + escapeHTML(resultHref(route)) + '"><span class="route-icon">' + icon('bus') + '</span><span><strong>' + titleFor(route) + '</strong><small>' + (route.region.startsWith('Ставропольский') ? 'Междугородний маршрут' : route.region) + '</small></span><span class="route-arrow">' + icon('next') + '</span></a></li>').join('')}</ul>`;
 
 const helpLinks = [
-  ['posadka', 'Посадка и документы', 'Что взять с собой и где сесть в автобус', 'doc'],
-  ['bagazh', 'Багаж', 'Как проверить, что входит в билет', 'bag'],
-  ['vozvrat', 'Возврат билета', 'Где посмотреть условия и статус', 'ticket']
+  ['/pomosh/posadka/', 'Посадка и документы', 'Что взять с собой и где сесть в автобус', 'doc'],
+  ['/pomosh/bagazh/', 'Багаж', 'Как проверить, что входит в билет', 'bag'],
+  ['/vozvrat/', 'Возврат билета', 'Правила и расчёт по номеру заказа', 'ticket']
 ];
-const supportTiles = () => '<ul class="directions-list help-links">' + helpLinks.map(([slug, title, desc, symbol]) => '<li><a href="/pomosh/' + slug + '/"><span class="route-icon">' + icon(symbol) + '</span><span><strong>' + title + '</strong><small>' + desc + '</small></span><span class="route-arrow">' + icon('next') + '</span></a></li>').join('') + '</ul>';
-export const navLinks = (links + '<a href="/pomosh/vozvrat/">Возврат билета</a><a href="/perevozchikam/">Перевозчикам</a>')
+const supportTiles = () => '<ul class="directions-list help-links">' + helpLinks.map(([path, title, desc, symbol]) => '<li><a href="' + path + '"><span class="route-icon">' + icon(symbol) + '</span><span><strong>' + title + '</strong><small>' + desc + '</small></span><span class="route-arrow">' + icon('next') + '</span></a></li>').join('') + '</ul>';
+export const navLinks = links
   .replace(/href="\//g, 'href="' + sitePath('/'));
+
+const benefits = [
+  ['route', 'Рейс под ваши планы', 'Сравните время выезда и прибытия, остановки и пункты посадки.'],
+  ['ticket', 'Билет и заказ под рукой', 'После оформления откройте билет и номер заказа на одном экране.'],
+  ['clock', 'Планы изменились?', 'Посмотрите условия и сумму возврата по номеру заказа.', '/vozvrat/']
+];
 
 export function home() {
   return page({ title: 'Билеты на междугородние автобусы — Туда‑сюда', description: 'Поиск междугородних автобусных рейсов по направлению и дате.', pageType: 'home', body: `
@@ -102,6 +109,10 @@ export function home() {
         </div>
         <figure class="hero-photo"><img src="/assets/coast.webp" alt="Междугородний автобус едет вдоль черноморского побережья" width="1200" height="800" fetchpriority="high"></figure>
       </section>
+      <section class="home-section" aria-labelledby="benefits-heading">
+        <div class="section-header"><h2 id="benefits-heading">От поиска до поездки</h2></div>
+        <ul class="benefits-list">${benefits.map(([symbol, title, copy, path]) => `<li class="panel"><span class="route-icon">${icon(symbol)}</span><div><h3>${title}</h3><p>${copy}</p>${path ? `<a class="text-link" href="${path}">Вернуть билет ${icon('arrow')}</a>` : ''}</div></li>`).join('')}</ul>
+      </section>
       <section class="home-section" aria-labelledby="popular-heading">
         <div class="section-header"><h2 id="popular-heading">Популярные направления</h2><a href="/avtobusy/" class="text-link">Все направления ${icon('arrow')}</a></div>
         ${directionsList()}
@@ -112,11 +123,12 @@ export function home() {
 
 export const documentButton = (key, label) => '<button type="button" class="text-link doc-link" data-doc="' + key + '">' + label + '</button>';
 const supportButton = () => '<button type="button" class="button support-action" data-support aria-haspopup="dialog" aria-controls="sheet">' + icon('message') + ' Связаться</button>';
+export const demoSupportEmail = 'support@example.invalid';
 export const supportChannels = () => `<div class="support-channels">
   <p class="field-hint">Демонстрационные способы связи</p>
   <ul aria-label="Тестовые каналы">
     <li><span class="route-icon">${icon('message')}</span><div><strong>Чат поддержки</strong><span>Тестовый канал</span></div></li>
-    <li><span class="route-icon">${icon('mail')}</span><div><strong>Электронная почта</strong><span>support@example.invalid</span></div></li>
+    <li><span class="route-icon">${icon('mail')}</span><div><strong>Электронная почта</strong><span>${demoSupportEmail}</span></div></li>
   </ul>
   <a class="text-link" href="${sitePath('/pomosh/posadka/')}">Открыть справку ${icon('arrow')}</a>
 </div>`;
@@ -292,16 +304,92 @@ function contentPage(path, title, content) {
   return page({path, title: title + ' — Туда‑сюда', description: title + '. Справка по междугородним автобусным поездкам.', pageType: 'content', body: '<div class="wrap content-page"><a href="/" class="text-link back-link">' + icon('back') + ' На главную</a><h1>' + title + '</h1>' + content + '</div>'});
 }
 
+function returnPage() {
+  return page({
+    path: '/vozvrat/', pageType: 'refund', title: 'Вернуть билет — Туда‑сюда',
+    description: 'Правила, расчёт и демонстрационный возврат автобусных билетов по номеру заказа.',
+    body: `<div class="wrap content-page refund-page">
+      <a href="/" class="text-link back-link">${icon('back')} На главную</a>
+      <h1>Вернуть билет</h1>
+      <div id="refund-intro">
+        <p>Введите номер из билета или со страницы заказа.</p>
+        <p class="notice">Демовозврат доступен для билета, оформленного в этой вкладке.</p>
+      </div>
+      <form class="panel form-stack refund-form" id="refund-form" novalidate>
+        <div class="field">
+          <label for="refund-number">Номер заказа</label>
+          <input type="text" id="refund-number" placeholder="ТС-123456" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="refund-number-error" required>
+          <p class="error" id="refund-number-error" hidden></p>
+        </div>
+        <button type="button" class="text-link" data-use-demo-order hidden>Подставить номер демозаказа</button>
+        <div id="refund-quote" aria-live="polite"></div>
+        <fieldset class="purchase-consent" id="refund-consent">
+          <legend class="sr-only">Согласие на возврат</legend>
+          <div class="consent-row"><input type="checkbox" id="refund-agree" aria-describedby="refund-consent-error" required><label for="refund-agree">Ознакомился с правилами возврата</label></div>
+          <button type="button" class="text-link doc-link" data-refund-rules aria-haspopup="dialog">Правила возврата</button>
+          <p class="error" id="refund-consent-error" hidden></p>
+        </fieldset>
+        <button type="submit" class="button primary full" data-submit-refund disabled>Оформить возврат</button>
+        <noscript><p>Для возврата в демоверсии включите JavaScript.</p></noscript>
+      </form>
+      <section class="panel form-stack refund-result" id="refund-result" aria-labelledby="refund-result-title" hidden>
+        <span class="route-icon">${icon('check')}</span>
+        <h2 id="refund-result-title" tabindex="-1"></h2>
+        <div id="refund-result-copy"></div>
+        <p>Почта поддержки в демоверсии <strong>${demoSupportEmail}</strong></p>
+        <button type="button" class="text-link" data-reset-refund>Проверить другой номер</button>
+      </section>
+      <p class="field-hint" id="refund-start" hidden>Для проверки оформите демобилет через <a href="/">поиск рейсов</a>.</p>
+    </div>`
+  });
+}
+
+function carrierPage() {
+  return page({
+    path: '/perevozchikam/',
+    title: 'Для перевозчиков — Туда‑сюда',
+    description: 'Заявка на подключение междугородних рейсов перевозчика к Туда‑сюда.',
+    pageType: 'carriers',
+    body: `<div class="wrap content-page carrier-page">
+      <a href="/" class="text-link back-link">${icon('back')} На главную</a>
+      <h1>Для перевозчиков</h1>
+      <p class="carrier-intro">Предложите свои междугородние рейсы для подключения к «Туда‑сюда».</p>
+      <form id="carrier-form" class="panel form-stack carrier-application" aria-labelledby="carrier-form-title" aria-describedby="carrier-demo" autocomplete="off" novalidate>
+        <div>
+          <h2 id="carrier-form-title">Заявка на подключение</h2>
+          <p id="carrier-demo" class="field-hint">Демонстрационная форма. Для проверки введите вымышленные данные.</p>
+          <p class="field-hint">Все поля обязательны.</p>
+        </div>
+        <div class="field"><label for="carrier-company">Компания или ИП</label><input id="carrier-company" type="text" required aria-describedby="carrier-company-error"><p class="error" id="carrier-company-error" hidden></p></div>
+        <div class="field"><label for="carrier-contact">Имя контактного лица</label><input id="carrier-contact" type="text" required aria-describedby="carrier-contact-error"><p class="error" id="carrier-contact-error" hidden></p></div>
+        <div class="field"><label for="carrier-phone">Телефон</label><input id="carrier-phone" type="tel" inputmode="tel" required aria-describedby="carrier-phone-error"><p class="error" id="carrier-phone-error" hidden></p></div>
+        <div class="field"><label for="carrier-route">Город или маршрут</label><input id="carrier-route" type="text" required aria-describedby="carrier-route-error"><p class="error" id="carrier-route-error" hidden></p></div>
+        <div class="field"><label for="carrier-proposal">Автопарк или предложение</label><textarea id="carrier-proposal" rows="4" required aria-describedby="carrier-proposal-hint carrier-proposal-error"></textarea><p class="field-hint" id="carrier-proposal-hint">Укажите, сколько автобусов и посадочных мест, или расскажите, какие рейсы хотите подключить.</p><p class="error" id="carrier-proposal-error" hidden></p></div>
+        <button type="submit" class="button primary" disabled>Отправить заявку</button>
+        <p class="carrier-confirmation" id="carrier-confirmation" role="status" tabindex="-1"></p>
+        <noscript><p class="field-hint">Для проверки формы включите JavaScript.</p></noscript>
+      </form>
+      <section class="carrier-faq" aria-labelledby="carrier-faq-title">
+        <h2 id="carrier-faq-title">Частые вопросы</h2>
+        <details><summary>Кого можно подключить к пилоту?</summary><p>В первую очередь рассматриваются направления из Ставрополя в Москву, Сочи, Анапу, Новороссийск и Геленджик в обе стороны.</p></details>
+        <details><summary>Что подготовить по первому рейсу?</summary><p>Дату и местное время, адреса посадки и высадки, тариф, доступные места и правила перевозки.</p></details>
+        <details><summary>Если у билетной системы нет API?</summary><p>Для пилота требуется проверить способ обмена расписанием, остатками и резервами в конкретной учётной системе.</p></details>
+      </section>
+    </div>`
+  });
+}
+
 export const articles = {
   '/pomosh/posadka/': ['Посадка и документы', '<p>Проверьте точку посадки, местное время отправления и документ в билете. У одного города может быть несколько автовокзалов.</p><h2>Что взять с собой</h2><p>Возьмите документ, данные которого указали при покупке. В каком виде принимают билет и за сколько времени нужно приехать, уточняйте в деталях рейса.</p><h2>Где сесть в автобус</h2><p>Откройте расписание, выберите дату и раскройте «Детали рейса». Там указан адрес посадки.</p>'],
   '/pomosh/bagazh/': ['Багаж в автобусе', '<p>Нормы по размеру, весу и количеству мест зависят от перевозчика и тарифа. В деталях рейса проверьте, включён ли багаж и где его оплачивать.</p>'],
-  '/pomosh/vozvrat/': ['Возврат билета', '<p>Откройте свой заказ и проверьте правило тарифа. Условия добровольного возврата и порядок действий при отмене рейса могут отличаться.</p><p>Если расчёт недоступен, в заказе можно выбрать обращение в поддержку.</p>']
+  '/pomosh/vozvrat/': ['Возврат билета', '<p>Откройте свой заказ и проверьте правило тарифа. Условия добровольного возврата и порядок действий при отмене рейса могут отличаться.</p><p><a class="text-link" href="/vozvrat/">Вернуть билет по номеру заказа</a></p><p>Если расчёт недоступен, можно обратиться в поддержку.</p>']
 };
 
 export function publicPages() {
   const directory = [...new Set(routes.flatMap(route => [route.from, route.to]))];
   return {
     '/': home(),
+    '/vozvrat/': returnPage(),
     '/avtobusy/': contentPage('/avtobusy/', 'Автобусные направления', '<p>Выберите город отправления и направление, чтобы посмотреть рейсы на нужную дату.</p>' +
       directory.map(id => '<section class="catalog-group"><h2><a href="/avtobusy/' + id + '/">' + cities[id].name + '</a></h2>' + directionsList(routes.filter(route => route.from === id)) + '</section>').join('')),
     ...Object.fromEntries(directory.map(id => {
@@ -317,7 +405,7 @@ export function publicPages() {
     }),
     ...Object.fromEntries(routes.map(route => [routePath(route.from, route.to), resultsView(route)])),
     ...Object.fromEntries(Object.entries(articles).map(([path, [title, body]]) => [path, contentPage(path, title, body + '<h2>Проверить свой маршрут</h2>' + directionsList([routes[0], routes[1]]))])),
-    '/perevozchikam/': contentPage('/perevozchikam/', 'Перевозчикам', '<p>Для пилота нужны сведения о рейсах, тарифах, остатках мест и условиях посадки, багажа и возврата.</p><h2>Частые вопросы</h2><details><summary>Кого можно подключить к пилоту?</summary><p>В первую очередь рассматриваются направления из Ставрополя в Москву, Сочи, Анапу, Новороссийск и Геленджик в обе стороны.</p></details><details><summary>Что подготовить по первому рейсу?</summary><p>Дату и местное время, адреса посадки и высадки, тариф, доступные места и правила перевозки.</p></details><details><summary>Если у билетной системы нет API?</summary><p>Для пилота требуется проверить способ обмена расписанием, остатками и резервами в конкретной учётной системе.</p></details>'),
+    '/perevozchikam/': carrierPage(),
     '/profil/': contentPage('/profil/', 'Демопрофиль', '<div class="panel form-stack" id="profile-panel"><p>Здесь можно проверить повторную покупку с тестовыми контактами.</p></div>')
   };
 }

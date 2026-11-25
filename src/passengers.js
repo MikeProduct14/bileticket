@@ -51,6 +51,15 @@ export function examplePassenger(index) {
   return { lastName, firstName, middleName, gender, birth: '17.06.1990', documentType: 'passport', documentNumber: '0102 ' + String(3456 + index).padStart(6, '0') };
 }
 
+export function formatBirthInput(value, selectionStart = value.length) {
+  const digits = value.replace(/\D/g, '').slice(0, 8);
+  const formatted = [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4)].filter(Boolean).join('.');
+  const beforeCaret = Math.min(value.slice(0, selectionStart).replace(/\D/g, '').length, digits.length);
+  let caret = beforeCaret + Number(beforeCaret > 2) + Number(beforeCaret > 4);
+  if (value[selectionStart - 1] === '.' && formatted[caret] === '.') caret++;
+  return { value: formatted, caret };
+}
+
 export function inputField(key, draft, passenger) {
   const id = fieldId(key, passenger);
   const config = documentsByType[draft.documentType || 'passport'];

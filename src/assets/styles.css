@@ -173,6 +173,10 @@ main:focus, h1:focus, .order-status h2:focus { outline: none; }
 .home-section { margin-top: 43px; }
 .section-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 2px 18px; margin-bottom: 13px; }
 .section-header h2 { font-size: clamp(23px, 3vw, 34px); }
+.benefits-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0; margin: 0; list-style: none; }
+.benefits-list li { display: flex; align-items: flex-start; gap: 12px; padding: 17px; }
+.benefits-list p { margin-top: 6px; color: var(--quiet); font-size: 14px; }
+.benefits-list li:last-child { background: var(--sand); }
 .directions-list { padding: 0; margin: 0; list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
 .directions-list li { min-width: 0; }
 .directions-list a { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; min-height: 73px; height: 100%; padding: 11px 12px; text-decoration: none; background: var(--white); border: 1px solid var(--line); border-radius: 14px; transition: border-color .15s; }
@@ -345,6 +349,16 @@ label.field select { display: block; margin-top: 4px; }
 .content-page h2 { margin: 25px 0 10px; }
 .content-page p { max-width: 71ch; margin-top: 9px; }
 .content-page .directions-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.refund-page { max-width: 600px; }
+.refund-form, .refund-result { margin-top: 16px; gap: 13px; }
+.refund-form .error, .refund-result h2, .refund-result p { margin: 0; }
+.refund-form input:where(:not([type=checkbox])) { font-weight: 700; }
+.refund-form .doc-link { margin-inline-start: 31px; justify-self: start; }
+.refund-quote-inner { padding: 12px; border-radius: 12px; background: var(--mint); }
+.refund-quote-inner p { margin-top: 4px; font-size: 14px; }
+.refund-result { border-color: #b8d3c2; }
+.refund-result p { overflow-wrap: anywhere; }
+.refund-result p + p { margin-top: 8px; }
 
 @media (max-width: 880px) {
   .wrap { width: calc(100% - 40px); }
@@ -368,7 +382,7 @@ label.field select { display: block; margin-top: 4px; }
   .hero-photo { margin: 0 7px 7px; height: clamp(120px, 35vw, 196px); border-radius: 13px; }
   .hero-photo img { object-position: 50% 60%; }
   .home-section { margin-top: 28px; }
-  .directions-list, .content-page .directions-list { grid-template-columns: 1fr; }
+  .directions-list, .content-page .directions-list, .benefits-list { grid-template-columns: 1fr; }
   .section-header { margin-bottom: 9px; }
   .directions-list a { min-height: 62px; padding-block: 9px; }
   .footer-inner { flex-direction: column; }

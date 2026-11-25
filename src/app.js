@@ -1,7 +1,7 @@
 import { cities, routesByPath, sitePath, today, offsetDate, dateLabel, validDate, rub, tripsFor, dayPrice, refundFor, sortTrips, searchPath, findRoute, resultHref, isReferenceSchedule } from './data.js';
 import { icon, titleFor, escapeHTML, navLinks, documentButton, tripCard, tripDetails, timeLine, dateStrip, supportChannels, resultsContent, refundDetails as tripRefundDetails } from './views.js';
 import {
-  canAddPassenger, demoContacts, documentsByType, emptyDraft, examplePassenger, fieldId, genders,
+  canAddPassenger, demoContacts, documentsByType, emptyDraft, examplePassenger, fieldId, formatBirthInput, genders,
   hasAllSeats, inputField, passengerCard, peopleLabel, seatChoices, selectedOption, selectOptions,
   totalFor, validationMessage
 } from './passengers.js';
@@ -113,6 +113,12 @@ dialog.addEventListener('click', event => {
   }
 });
 
+function openDocument(key) {
+  const [title, sections] = documents[key];
+  sheet.open(title, '<p class="field-hint">Условия демонстрационного заказа</p>' + sections.map(([heading, body]) =>
+    '<section class="document-section"><h3>' + heading + '</h3><p>' + body + '</p></section>').join(''), '', 'document-sheet');
+}
+
 const floatingSupport = $('[data-support]');
 let supportFrame;
 function placeSupport() {
@@ -121,7 +127,7 @@ function placeSupport() {
     supportFrame = 0;
     if (dialog.open || document.activeElement === floatingSupport) return;
     const dock = floatingSupport.getBoundingClientRect();
-    const controls = $$('#main :is(.primary, .search-control, .results-control, .availability-switch, .checkout button, input:not([type=hidden]), select, textarea), .site-footer nav a');
+    const controls = $$('#main :is(.primary, .search-control, .results-control, .availability-switch, .checkout button, .carrier-faq summary, .carrier-confirmation, input:not([type=hidden]), select, textarea), .site-footer nav a');
     const overlaps = controls.some(control => {
       const bounds = control.getBoundingClientRect();
       return bounds.width && bounds.height && bounds.left < dock.right && bounds.right > dock.left &&
@@ -144,6 +150,37 @@ function setError(element, error, message) {
   error.hidden = !message;
   if (message) element.setAttribute('aria-invalid', 'true');
   else element.removeAttribute('aria-invalid');
+}
+
+const carrierForm = $('#carrier-form');
+if (carrierForm) {
+  const fields = $$('[required]', carrierForm);
+  const confirmation = $('#carrier-confirmation', carrierForm);
+
+  function checkCarrierField(field) {
+    const value = field.value.trim();
+    const message = !value ? 'Заполните поле «' + field.labels[0].textContent + '».' :
+      field.type === 'tel' ? validationMessage('phone', value) : '';
+    setError(field, $('#' + field.id + '-error', carrierForm), message);
+    return !message;
+  }
+
+  carrierForm.addEventListener('input', event => {
+    confirmation.textContent = '';
+    if (event.target.matches('[aria-invalid=true]')) checkCarrierField(event.target);
+  });
+  carrierForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const invalid = fields.filter(field => !checkCarrierField(field));
+    if (invalid.length) {
+      invalid[0].focus();
+      return;
+    }
+    carrierForm.reset();
+    confirmation.textContent = 'Демозаявка проверена. Поля очищены.';
+    confirmation.focus();
+  });
+  $('[type=submit]', carrierForm).disabled = false;
 }
 
 const cityFields = ['from', 'to'].map(key => $('#' + key)).filter(Boolean);
@@ -489,9 +526,17 @@ function storeBooking() {
   }
 }
 
+function readStoredBooking() {
+  try {
+    return JSON.parse(sessionStorage.getItem(storageKey));
+  } catch {
+    return null;
+  }
+}
+
 function loadBooking() {
   try {
-    const saved = JSON.parse(sessionStorage.getItem(storageKey));
+    const saved = readStoredBooking();
     if (saved?.path === location.pathname && saved.date === date &&
         tripsFor(route, date, 'available').some(trip => trip.id === saved.tripId)) {
       if (!Array.isArray(saved.passengers) || !saved.passengers.length) {
@@ -514,6 +559,153 @@ function chosenTrip() {
   if (!booking) return null;
   const trip = tripsFor(route, booking.date, 'available').find(item => item.id === booking.tripId);
   return trip && { ...trip, price: booking.price, refundPolicy: booking.refundPolicy ?? trip.refundPolicy };
+}
+
+function orderDigits(value = '') {
+  return value.trim().match(/^(?:(?:ТС|TC)\s*[-‐‑–—]?\s*)?(\d{6})$/iu)?.[1];
+}
+
+function initRefundForm(form) {
+  const number = $('#refund-number', form);
+  const numberError = $('#refund-number-error', form);
+  const consent = $('#refund-consent', form);
+  const agree = $('#refund-agree', form);
+  const agreeError = $('#refund-consent-error', form);
+  const quotePanel = $('#refund-quote', form);
+  const submit = $('[data-submit-refund]', form);
+  const fill = $('[data-use-demo-order]', form);
+  const intro = $('#refund-intro');
+  const result = $('#refund-result');
+  const start = $('#refund-start');
+  let preview;
+
+  function findOrder() {
+    const digits = orderDigits(number.value);
+    const order = readStoredBooking();
+    if (!digits || order?.status !== 'issued' || digits !== orderDigits(order.orderId) ||
+        !Array.isArray(order.passengers) || !order.passengers.length || !Number.isFinite(order.price)) return null;
+    const orderRoute = routesByPath[order.path];
+    const trip = orderRoute && tripsFor(orderRoute, order.date, 'available').find(item => item.id === order.tripId);
+    if (!trip) return null;
+    const ticket = { ...trip, refundPolicy: order.refundPolicy ?? trip.refundPolicy };
+    return { order, ticket, quote: order.refundQuote ?? refundFor(ticket, totalFor(order)) };
+  }
+
+  function showDemoHint() {
+    const order = readStoredBooking();
+    fill.hidden = order?.status !== 'issued';
+    start.hidden = !fill.hidden;
+  }
+
+  function setAgreementError(message) {
+    setError(agree, agreeError, message);
+    if (message) consent.dataset.invalid = 'true';
+    else delete consent.dataset.invalid;
+  }
+
+  function showQuote(details) {
+    preview = details;
+    consent.hidden = Boolean(details?.order.returnStatus);
+    agree.disabled = Boolean(details && !details.quote.available);
+    submit.disabled = agree.disabled && !consent.hidden;
+    submit.textContent = details?.order.returnStatus ? 'Проверить статус возврата' : 'Оформить возврат';
+    if (!details) {
+      quotePanel.innerHTML = '';
+      return;
+    }
+    const { order, quote, ticket } = details;
+    const ticketScope = order.passengers.length === 1 ? 'Возврат билета по этому заказу.' : 'Возврат всех билетов в заказе.';
+    const status = order.returnStatus ? 'Возврат по этому заказу уже запрошен.' :
+      quote.available ? ticketScope : 'Срок возврата по этому демотарифу истёк.';
+    quotePanel.innerHTML = '<div class="refund-quote-inner"><strong>' + escapeHTML(titleFor(ticket.route)) + '</strong><p>' +
+      dateLabel(ticket.date) + ' · ' + ticket.departure + ' · ' + peopleLabel(order.passengers.length) + '</p>' +
+      '<dl class="price-list"><div><dt>Удержание</dt><dd>' + priceText(quote.withholding) +
+      '</dd></div><div class="price-total"><dt>К возврату</dt><dd>' + priceText(quote.refund) + '</dd></div></dl><p>' + status + '</p></div>';
+  }
+
+  function numberChanged() {
+    setError(number, numberError, '');
+    agree.checked = false;
+    setAgreementError('');
+    showQuote(findOrder());
+  }
+
+  number.addEventListener('input', numberChanged);
+  fill.addEventListener('click', () => {
+    showDemoHint();
+    if (fill.hidden) return;
+    number.value = readStoredBooking().orderId;
+    numberChanged();
+    number.focus();
+  });
+  agree.addEventListener('change', () => {
+    if (agree.checked) setAgreementError('');
+  });
+  $('[data-refund-rules]', form).addEventListener('click', () => {
+    const details = findOrder();
+    if (details) sheet.open('Правила возврата', tripRefundDetails(details.ticket, null), '', 'document-sheet');
+    else openDocument('refund');
+  });
+  $('[data-reset-refund]', result).addEventListener('click', () => {
+    result.hidden = true;
+    intro.hidden = false;
+    form.hidden = false;
+    form.reset();
+    numberChanged();
+    showDemoHint();
+    number.focus();
+  });
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const details = findOrder();
+    if (!details) {
+      const message = !number.value.trim() ? 'Введите номер заказа.' : !orderDigits(number.value)
+        ? 'Введите шестизначный номер заказа. Например, ТС-123456.'
+        : 'Оформленный демозаказ с таким номером в этой вкладке не найден. Проверьте номер.';
+      setError(number, numberError, message);
+      number.focus();
+      return;
+    }
+    const { order, quote } = details;
+    const alreadyRequested = Boolean(order.returnStatus);
+    if (!alreadyRequested) {
+      if (!quote.available || preview?.quote.refund !== quote.refund) {
+        showQuote(details);
+        agree.checked = false;
+        if (quote.available) {
+          setAgreementError('Расчёт обновился. Проверьте сумму и подтвердите согласие.');
+          agree.focus();
+        } else number.focus();
+        return;
+      }
+      if (!agree.checked) {
+        setAgreementError('Подтвердите, что ознакомились с правилами возврата.');
+        agree.focus();
+        return;
+      }
+      order.refundQuote = quote;
+      order.returnStatus = 'complete';
+      try {
+        sessionStorage.setItem(storageKey, JSON.stringify(order));
+      } catch {
+        setError(number, numberError, 'Не удалось сохранить возврат в демоверсии. Попробуйте снова.');
+        number.focus();
+        return;
+      }
+    }
+    const title = $('#refund-result-title', result);
+    title.textContent = order.returnStatus === 'pending' ? 'Демовозврат в обработке' :
+      alreadyRequested ? 'Демовозврат уже оформлен' : 'Демовозврат оформлен';
+    $('#refund-result-copy', result).innerHTML = '<p>Заказ ' + escapeHTML(order.orderId) + ' · К возврату ' + priceText(quote.refund) +
+      '</p><p>При реальном возврате деньги поступят на карту, которой оплатили заказ. Срок зачисления зависит от банка.</p>';
+    form.hidden = true;
+    intro.hidden = true;
+    result.hidden = false;
+    title.focus();
+  });
+  showDemoHint();
+  showQuote(findOrder());
 }
 
 function profileStatus(next) {
@@ -698,13 +890,14 @@ function orderView(trip) {
     pending: ['Проверяем оплату', 'Исход операции уточняется. Можно повторить проверку статуса в этом же заказе.', button('Проверить статус', 'data-check-status', 'secondary')],
     issuing: ['Билет оформляется', 'Демооплата подтверждена. Проверяем выдачу билета.', button('Обновить статус', 'data-check-status', 'secondary')],
     declined: ['Оплата отклонена', 'В демосценарии платёж не прошёл. Повторить оплату можно из проверки заказа.', button('Вернуться к оплате', 'data-retry-payment', 'secondary')],
-    issued: [single ? 'Билет оформлен' : 'Билеты оформлены', 'Детали демонстрационной поездки доступны ниже.', button(single ? 'Открыть билет' : 'Открыть билеты', 'data-ticket')]
+    issued: booking.returnStatus === 'complete' ? ['Поездка отменена', 'Статус демовозврата доступен ниже.', ''] :
+      [single ? 'Билет оформлен' : 'Билеты оформлены', 'Детали демонстрационной поездки доступны ниже.', button(single ? 'Открыть билет' : 'Открыть билеты', 'data-ticket')]
   }[booking.status] || ['Заказ сохранён', 'Статус можно проверить здесь.', button('Проверить статус', 'data-check-status', 'secondary')];
   const refund = booking.status !== 'issued' ? '' :
     '<section class="panel form-stack"><h2>Возврат</h2>' + (booking.returnStatus ?
-      '<p role="status">' + (booking.returnStatus === 'complete' ? 'Тестовый возврат подтверждён · ' + priceText(booking.refundQuote?.refund ?? totalFor(booking)) : 'Тестовый запрос на возврат в обработке') + '</p>' +
+      '<p role="status">' + (booking.returnStatus === 'complete' ? 'Демовозврат оформлен · ' + priceText(booking.refundQuote?.refund ?? totalFor(booking)) : 'Тестовый запрос на возврат в обработке') + '</p>' +
       (booking.returnStatus !== 'complete' ? button('Проверить возврат', 'data-check-refund', 'secondary') : '') :
-      '<p>Посмотрите условия для этого билета и тестовый расчёт.</p>' + button('Рассчитать возврат', 'data-refund', 'secondary')) + '</section>';
+      '<p>Посмотрите условия для этого билета и сумму возврата.</p><a class="button secondary" href="' + sitePath('/vozvrat/') + '">Вернуть билет по номеру заказа</a>') + '</section>';
   const profile = booking.status === 'issued' && booking.profileOffered ? '<a href="' + sitePath('/profil/') + '" class="text-link">Открыть демопрофиль</a>' : '';
   return '<div class="checkout-grid"><div class="form-stack"><section class="panel form-stack order-status"><span class="route-icon">' + icon(booking.status === 'issued' ? 'check' : 'ticket') + '</span><h2>' + stage[0] + '</h2><p>' +
     stage[1] + '</p>' + stage[2] + '<a href="' + sitePath('/pomosh/vozvrat/') + '" class="text-link">Справка по заказу</a>' + profile + '</section>' + refund + '</div>' + summaryPanel(trip) + '</div>';
@@ -813,18 +1006,6 @@ function changePassengerOption(value) {
   });
 }
 
-let refundQuotePreview;
-function openRefundQuote() {
-  const trip = chosenTrip();
-  refundQuotePreview = refundFor(trip, totalFor(booking));
-  const { withholding, refund, available } = refundQuotePreview;
-  const totals = '<dl class="price-list"><div><dt>Удержание</dt><dd>' + priceText(withholding) +
-    '</dd></div><div class="price-total"><dt>К возврату</dt><dd>' + priceText(refund) + '</dd></div></dl>';
-  sheet.open('Расчёт возврата', tripRefundDetails(trip, null) + totals +
-    (available ? '' : '<p class="notice">Срок возврата по демотарифу истёк.</p>'),
-    available ? button('Подтвердить возврат', 'data-confirm-refund') : '', 'document-sheet');
-}
-
 let reserveClock;
 function syncReserve() {
   clearInterval(reserveClock);
@@ -903,14 +1084,37 @@ function waitForPayment() {
   }, 1100);
 }
 
-checkoutView?.addEventListener('input', event => {
-  const input = event.target;
-  if (input.matches('input[data-input]')) {
-    const passenger = passengerFor(input);
-    const draft = passenger ? savedDraft(passenger) : formDraft;
-    draft[input.dataset.input] = input.value.trim();
-    if (input.getAttribute('aria-invalid') === 'true') checkField(input);
+function savePassengerInput(input) {
+  const key = input.dataset.input;
+  if (key === 'birth') {
+    const { value, caret } = formatBirthInput(input.value, input.selectionStart);
+    if (value !== input.value) {
+      input.value = value;
+      input.setSelectionRange(caret, caret);
+    }
   }
+  const passenger = passengerFor(input);
+  const draft = passenger ? savedDraft(passenger) : formDraft;
+  draft[key] = input.value.trim();
+  if (input.getAttribute('aria-invalid') === 'true') checkField(input);
+}
+
+checkoutView?.addEventListener('beforeinput', event => {
+  const input = event.target;
+  if (!event.cancelable || !input.matches('input[data-input="birth"]')) return;
+  const caret = input.selectionStart;
+  if (caret !== input.selectionEnd) return;
+  if (event.inputType === 'deleteContentBackward' && input.value[caret - 1] === '.') {
+    event.preventDefault();
+    input.setRangeText('', caret - 2, caret, 'start');
+  } else if (event.inputType === 'deleteContentForward' && input.value[caret] === '.') {
+    event.preventDefault();
+    input.setRangeText('', caret, caret + 2, 'start');
+  } else return;
+  savePassengerInput(input);
+});
+checkoutView?.addEventListener('input', event => {
+  if (event.target.matches('input[data-input]')) savePassengerInput(event.target);
 });
 checkoutView?.addEventListener('focusout', event => {
   if (event.target.matches('input[data-input]') && event.target.value.trim()) checkField(event.target);
@@ -1006,8 +1210,7 @@ document.addEventListener('click', event => {
     if (trip) sheet.open('Условия возврата', tripRefundDetails(trip), '', 'document-sheet');
   }
   else if ('doc' in data) {
-    const [title, sections] = documents[data.doc];
-    sheet.open(title, '<p class="field-hint">Условия демонстрационного заказа</p>' + sections.map(([heading, body]) => '<section class="document-section"><h3>' + heading + '</h3><p>' + body + '</p></section>').join(''), '', 'document-sheet');
+    openDocument(data.doc);
   } else if ('swap' in data) {
     const [a, b] = cityFields;
     [a.value, b.value] = [b.value, a.value];
@@ -1127,15 +1330,6 @@ document.addEventListener('click', event => {
       tripDetails(ticket, { includeCarrier: true, refundTotal: null }), '', 'document-sheet');
   } else if ('bookingRefund' in data) {
     sheet.open('Условия возврата', tripRefundDetails(chosenTrip(), null), '', 'document-sheet');
-  } else if ('refund' in data) {
-    openRefundQuote();
-  } else if ('confirmRefund' in data) {
-    const freshQuote = refundFor(chosenTrip(), totalFor(booking));
-    if (!freshQuote.available || freshQuote.refund !== refundQuotePreview?.refund) return openRefundQuote();
-    booking.refundQuote = freshQuote;
-    booking.returnStatus = 'pending';
-    storeBooking();
-    sheet.close(() => renderStep('order', { keepScroll: true }));
   } else if ('checkRefund' in data) {
     booking.returnStatus = 'complete';
     storeBooking();
@@ -1151,3 +1345,13 @@ $('#demo-scenario')?.addEventListener('change', event => applyScenario(event.tar
 if (history.state?.sheet) history.replaceState({ ...history.state, sheet: false }, '');
 restoreFromURL({ initialLoad: true });
 renderProfile();
+const refundForm = $('#refund-form');
+if (refundForm) initRefundForm(refundForm);
+window.addEventListener('pageshow', event => {
+  if (!event.persisted || step !== 'order' || !booking?.orderId) return;
+  const stored = readStoredBooking();
+  if (stored?.orderId === booking.orderId && stored.returnStatus && stored.returnStatus !== booking.returnStatus) {
+    booking = stored;
+    renderStep('order', { keepScroll: true });
+  }
+});
